@@ -1,0 +1,163 @@
+const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function getCtxDir() {
+    return path.join(os.homedir(), '.ai-context');
+}
+
+function getArchiveDir() {
+    return path.join(os.homedir(), '.ai-context', 'archive');
+}
+
+function getWorkspaceRoot() {
+    const folders = vscode.workspace.workspaceFolders;
+    return folders && folders.length > 0 ? folders[0].uri.fsPath : os.homedir();
+}
+
+function ensureDir(dir) {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function listContexts(dir) {
+    ensureDir(dir);
+    return fs.readdirSync(dir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => path.basename(f, '.json'));
+}
+
+function listArchivedContexts() {
+    const archiveDir = getArchiveDir();
+    if (!fs.existsSync(archiveDir)) return [];
+    return fs.readdirSync(archiveDir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => path.basename(f, '.json'));
+}
+
+function loadContext(dir, name) {
+    const file = path.join(dir, `${name}.json`);
+    if (!fs.existsSync(file)) {
+        return {
+            v: 1, u: os.userInfo().username, p: name, root: '',
+            t: 'init', s: {}, a: [], e: null, i: '',
+            createdAt: new Date().toISOString(), lastUsed: null,
+        };
+    }
+    try {
+        return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+        return {
+            v: 1, u: os.userInfo().username, p: name, root: '',
+            t: 'init', s: {}, a: [], e: 'ctx_parse_err', i: '',
+            createdAt: null, lastUsed: null,
+        };
+    }
+}
+
+function loadArchivedContext(name) {
+    const file = path.join(getArchiveDir(), `${name}.json`);
+    try {
+        return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+        return { root: '', lastUsed: null, createdAt: null };
+    }
+}
+
+// Always updates lastUsed on write. createdAt is preserved from ctx — set it
+// once on creation and it will survive every subsequent save.
+function saveContext(dir, name, ctx) {
+    ensureDir(dir);
+    fs.writeFileSync(
+        path.join(dir, `${name}.json`),
+        JSON.stringify({ ...ctx, lastUsed: new Date().toISOString() })
+    );
+}
+
+function deleteContext(dir, name) {
+    const file = path.join(dir, `${name}.json`);
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+}
+
+// Moves a context to ~/.ai-context/archive/. If a file with that name already
+// exists in the archive, a timestamp suffix is added to avoid overwriting it.
+function archiveContext(dir, name) {
+    const src        = path.join(dir, `${name}.json`);
+    const archiveDir = getArchiveDir();
+    ensureDir(archiveDir);
+
+    let dest = path.join(archiveDir, `${name}.json`);
+    if (fs.existsSync(dest)) {
+        dest = path.join(archiveDir, `${name}_${Date.now()}.json`);
+    }
+    fs.renameSync(src, dest);
+    return path.basename(dest, '.json');
+}
+
+// Moves an archived context back to the active store.
+// If the name collides with an existing active context, appends _restored_N.
+function restoreArchivedContext(archiveName) {
+    const archiveDir = getArchiveDir();
+    const src        = path.join(archiveDir, `${archiveName}.json`);
+    const dir        = getCtxDir();
+    ensureDir(dir);
+
+    const baseName = archiveName.replace(/_\d{13}$/, ''); // strip timestamp suffix if present
+    let destName = baseName;
+    let dest     = path.join(dir, `${destName}.json`);
+    let counter  = 1;
+    while (fs.existsSync(dest)) {
+        destName = `${baseName}_restored_${counter++}`;
+        dest     = path.join(dir, `${destName}.json`);
+    }
+    fs.renameSync(src, dest);
+    return destName;
+}
+
+// Returns subdirectory names from ~/projects/ for the new-context project picker.
+function listProjectDirs() {
+    const projectsDir = path.join(os.homedir(), 'projects');
+    if (!fs.existsSync(projectsDir)) return [];
+    try {
+        return fs.readdirSync(projectsDir)
+            .filter(f => {
+                try { return fs.statSync(path.join(projectsDir, f)).isDirectory(); } catch { return false; }
+            })
+            .map(f => ({ label: f, path: path.join(projectsDir, f) }));
+    } catch {
+        return [];
+    }
+}
+
+function formatRelativeTime(isoString) {
+    if (!isoString) return 'never';
+    const diff    = Date.now() - new Date(isoString).getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours   = Math.floor(diff / 3600000);
+    const days    = Math.floor(diff / 86400000);
+    const months  = Math.floor(days / 30);
+    const years   = Math.floor(days / 365);
+    if (minutes < 1)  return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24)   return `${hours}h ago`;
+    if (days < 30)    return `${days}d ago`;
+    if (months < 12)  return `${months} month${months !== 1 ? 's' : ''} ago`;
+    return `${years} year${years !== 1 ? 's' : ''} ago`;
+}
+
+module.exports = {
+    getCtxDir,
+    getArchiveDir,
+    getWorkspaceRoot,
+    ensureDir,
+    listContexts,
+    listArchivedContexts,
+    loadContext,
+    loadArchivedContext,
+    saveContext,
+    deleteContext,
+    archiveContext,
+    restoreArchivedContext,
+    listProjectDirs,
+    formatRelativeTime,
+};

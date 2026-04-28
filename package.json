@@ -1,0 +1,58 @@
+{
+  "name": "ai-context-runner",
+  "displayName": "AI Context Runner",
+  "description": "Stateful AI session manager — auto-injects context into Claude and Copilot on workspace open",
+  "version": "2.3.0",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ai.runTask",
+        "title": "AI: Run Task"
+      },
+      {
+        "command": "ai.setActiveContext",
+        "title": "AI: Set Active Context"
+      },
+      {
+        "command": "ai.viewContext",
+        "title": "AI: View Context"
+      },
+      {
+        "command": "ai.newContext",
+        "title": "AI: New Context"
+      },
+      {
+        "command": "ai.deleteContext",
+        "title": "AI: Delete Context"
+      },
+      {
+        "command": "ai.cleanUpContexts",
+        "title": "AI: Clean Up Contexts"
+      },
+      {
+        "command": "ai.restoreContext",
+        "title": "AI: Restore Archived Context"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ai.runTask",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a"
+      },
+      {
+        "command": "ai.setActiveContext",
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s"
+      }
+    ]
+  }
+}
