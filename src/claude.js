@@ -1,4 +1,12 @@
+const vscode = require('vscode');
 const { spawn } = require('child_process');
+
+// Returns the configured CLI path, defaulting to 'claude' on PATH.
+function getCliPath() {
+    const config  = vscode.workspace.getConfiguration('aiContext');
+    const cliPath = config.get('cliPath');
+    return cliPath && cliPath.trim() ? cliPath.trim() : 'claude';
+}
 
 function buildPrompt(ctx, task) {
     return `You are resuming a prior AI session.
@@ -45,12 +53,13 @@ function stripContextUpdate(response) {
         .trimEnd();
 }
 
-// Calls the Claude Code CLI in non-interactive print mode.
+// Calls the configured AI CLI in non-interactive print mode.
 // Prompt is passed via stdin to avoid OS argument-length limits on large contexts.
 function runWithClaude(prompt) {
     return new Promise((resolve, reject) => {
-        const proc = spawn('claude', ['-p', '--output-format', 'text', '-'], {
-            env: { ...process.env },
+        const cli  = getCliPath();
+        const proc = spawn(cli, ['-p', '--output-format', 'text', '-'], {
+            env:   { ...process.env },
             shell: process.platform === 'win32',
         });
 
@@ -65,16 +74,16 @@ function runWithClaude(prompt) {
 
         proc.on('error', err => reject(
             err.code === 'ENOENT'
-                ? new Error('Claude CLI not found. Make sure "claude" is on your PATH.')
+                ? new Error(`CLI not found: "${cli}". Set aiContext.cliPath or add it to PATH.`)
                 : err
         ));
 
         proc.on('close', code =>
             code === 0
                 ? resolve(stdout)
-                : reject(new Error(stderr.trim() || `Claude exited with code ${code}`))
+                : reject(new Error(stderr.trim() || `CLI exited with code ${code}`))
         );
     });
 }
 
-module.exports = { buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude };
+module.exports = { getCliPath, buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude };

@@ -7,8 +7,7 @@ const { ensureDir } = require('./context');
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
 
-// Maps agent ID → function that returns the file path(s) to inject into.
-// All paths are relative to ctx.root (the project folder).
+// Maps agent ID → function(root) → array of file paths to inject into.
 const AGENT_TARGETS = {
     claude:   root => [path.join(root, 'CLAUDE.md')],
     codex:    root => [path.join(root, 'AGENTS.md')],
@@ -18,8 +17,7 @@ const AGENT_TARGETS = {
     kilo:     root => [path.join(root, 'KILO.md')],
 };
 
-// Returns the configured list of agents from VS Code settings.
-// Defaults to ['claude', 'codex', 'copilot'] if not configured.
+// Returns the configured list of agents. Defaults to ['claude','codex','copilot'].
 function getAgents() {
     const config = vscode.workspace.getConfiguration('aiContext');
     const agents = config.get('agents');
@@ -28,11 +26,10 @@ function getAgents() {
         : ['claude', 'codex', 'copilot'];
 }
 
-// Returns all file paths that should be injected for the current agent config.
+// Returns all injection target file paths for the given root + current agent config.
 function getInjectionTargets(root) {
-    const agents = getAgents();
     const targets = [];
-    for (const agent of agents) {
+    for (const agent of getAgents()) {
         const fn = AGENT_TARGETS[agent];
         if (fn) targets.push(...fn(root));
     }
@@ -60,7 +57,7 @@ function buildInjectionBlock(ctx) {
 function injectIntoFile(filePath, blockContent) {
     ensureDir(path.dirname(filePath));
     let existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
-    const block = `${INJECT_START}\n${blockContent}\n${INJECT_END}`;
+    const block  = `${INJECT_START}\n${blockContent}\n${INJECT_END}`;
 
     if (existing.includes(INJECT_START)) {
         const start = existing.indexOf(INJECT_START);
@@ -84,14 +81,43 @@ function clearInjection(filePath) {
     );
 }
 
+// Adds injection target filenames to .gitignore if not already present.
+function updateGitignore(projectRoot, targetPaths) {
+    const gitignorePath = path.join(projectRoot, '.gitignore');
+    let content = fs.existsSync(gitignorePath)
+        ? fs.readFileSync(gitignorePath, 'utf8')
+        : '';
+
+    const lines   = content.split('\n').map(l => l.trim());
+    const toAdd   = [];
+
+    for (const filePath of targetPaths) {
+        // Store as path relative to project root
+        const rel = path.relative(projectRoot, filePath).replace(/\\/g, '/');
+        if (!lines.includes(rel)) toAdd.push(rel);
+    }
+
+    if (toAdd.length === 0) return;
+
+    const sep = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+    fs.writeFileSync(gitignorePath, content + sep + toAdd.join('\n') + '\n');
+}
+
 // Injects context into all configured agent files inside ctx.root.
-// Falls back to home dir if ctx.root is not set (legacy / unbound contexts).
+// Falls back to home dir if ctx.root is not set.
+// Optionally updates .gitignore if aiContext.autoGitignore is enabled.
 function autoInject(ctx) {
     const root    = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
     const block   = buildInjectionBlock(ctx);
     const targets = getInjectionTargets(root);
+
     for (const filePath of targets) {
         injectIntoFile(filePath, block);
+    }
+
+    const config = vscode.workspace.getConfiguration('aiContext');
+    if (config.get('autoGitignore')) {
+        updateGitignore(root, targets);
     }
 }
 
@@ -113,6 +139,7 @@ module.exports = {
     buildInjectionBlock,
     injectIntoFile,
     clearInjection,
+    updateGitignore,
     clearInjectionForContext,
     autoInject,
 };

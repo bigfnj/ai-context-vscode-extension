@@ -2,7 +2,7 @@
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
   "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "publisher": "local",
   "repository": {
     "type": "git",
@@ -44,6 +44,10 @@
       {
         "command": "ai.restoreContext",
         "title": "AI: Restore Archived Context"
+      },
+      {
+        "command": "ai.config",
+        "title": "AI: Config"
       }
     ],
     "keybindings": [
@@ -56,6 +60,11 @@
         "command": "ai.setActiveContext",
         "key": "ctrl+alt+s",
         "mac": "cmd+alt+s"
+      },
+      {
+        "command": "ai.config",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
       }
     ],
     "configuration": {
@@ -64,7 +73,7 @@
         "aiContext.projectsRoot": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Root folder containing your projects. Used for the project picker when creating contexts.\n\nExample (WSL): `/home/Vibe-Projects`\n\nLeave blank to use `~/projects`."
+          "markdownDescription": "Root folder containing your projects. Used for the project picker and scanned on launch.\n\nExample (WSL): `/home/Vibe-Projects`\n\nLeave blank to use `~/projects`."
         },
         "aiContext.agents": {
           "type": "array",
@@ -74,6 +83,43 @@
             "enum": ["claude", "codex", "copilot", "cursor", "windsurf", "kilo"]
           },
           "markdownDescription": "AI agents to inject context for on workspace open.\n\n| Value | File written |\n|---|---|\n| `claude` | `CLAUDE.md` |\n| `codex` | `AGENTS.md` |\n| `copilot` | `.github/copilot-instructions.md` |\n| `cursor` | `.cursorrules` |\n| `windsurf` | `.windsurfrules` |\n| `kilo` | `KILO.md` |"
+        },
+        "aiContext.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Full path to the `claude` CLI binary. Leave blank to use `claude` from PATH.\n\nExample (WSL): `/usr/local/bin/claude`"
+        },
+        "aiContext.autoDetect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-detect and load the matching context when opening a project folder."
+        },
+        "aiContext.scanOnLaunch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan projectsRoot on launch and auto-create context entries for any new projects found."
+        },
+        "aiContext.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notification messages when context is auto-loaded, switched, or new projects are found."
+        },
+        "aiContext.autoGitignore": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically add injected AI files (CLAUDE.md, AGENTS.md, etc.) to the project's .gitignore."
+        },
+        "aiContext.contextDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Override the context store directory. Leave blank to use `~/.ai-context`."
+        },
+        "aiContext.maxActions": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of recent actions to keep in context history."
         }
       }
     }

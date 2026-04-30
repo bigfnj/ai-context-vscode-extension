@@ -3,12 +3,16 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// Returns the context store directory — respects aiContext.contextDir override.
 function getCtxDir() {
+    const config    = vscode.workspace.getConfiguration('aiContext');
+    const override  = config.get('contextDir');
+    if (override && override.trim()) return normalizePath(override.trim());
     return path.join(os.homedir(), '.ai-context');
 }
 
 function getArchiveDir() {
-    return path.join(os.homedir(), '.ai-context', 'archive');
+    return path.join(getCtxDir(), 'archive');
 }
 
 function getWorkspaceRoot() {
@@ -21,22 +25,20 @@ function getWorkspaceRoot() {
 // Normalizes a path for WSL:
 //   - Resolves leading ~ to home dir
 //   - Strips trailing slashes for consistent prefix matching
-//   - Handles whitespace
+//   - Trims whitespace
 function normalizePath(p) {
     if (!p || typeof p !== 'string') return p;
     p = p.trim();
     if (p.startsWith('~')) p = os.homedir() + p.slice(1);
-    return p.replace(/\/+$/, '');  // strip trailing slashes
+    return p.replace(/\/+$/, '');
 }
 
 // Returns the configured projects root directory.
 // Reads aiContext.projectsRoot from VS Code settings; falls back to ~/projects.
 function getProjectsRoot() {
-    const config = vscode.workspace.getConfiguration('aiContext');
+    const config     = vscode.workspace.getConfiguration('aiContext');
     const configured = config.get('projectsRoot');
-    if (configured && configured.trim()) {
-        return normalizePath(configured.trim());
-    }
+    if (configured && configured.trim()) return normalizePath(configured.trim());
     return path.join(os.homedir(), 'projects');
 }
 
@@ -88,13 +90,16 @@ function loadArchivedContext(name) {
     }
 }
 
-// Always updates lastUsed on write. createdAt is preserved from ctx — set it
-// once on creation and it will survive every subsequent save.
+// Always updates lastUsed on write. Trims action history to maxActions.
+// createdAt is preserved from ctx — set once on creation, survives every save.
 function saveContext(dir, name, ctx) {
     ensureDir(dir);
+    const config     = vscode.workspace.getConfiguration('aiContext');
+    const maxActions = config.get('maxActions') || 20;
+    const a          = Array.isArray(ctx.a) ? ctx.a.slice(-maxActions) : ctx.a;
     fs.writeFileSync(
         path.join(dir, `${name}.json`),
-        JSON.stringify({ ...ctx, lastUsed: new Date().toISOString() })
+        JSON.stringify({ ...ctx, a, lastUsed: new Date().toISOString() })
     );
 }
 
@@ -103,8 +108,7 @@ function deleteContext(dir, name) {
     if (fs.existsSync(file)) fs.unlinkSync(file);
 }
 
-// Moves a context to ~/.ai-context/archive/. If a file with that name already
-// exists in the archive, a timestamp suffix is added to avoid overwriting it.
+// Moves a context to archive/. Adds timestamp suffix on name collision.
 function archiveContext(dir, name) {
     const src        = path.join(dir, `${name}.json`);
     const archiveDir = getArchiveDir();
@@ -119,17 +123,17 @@ function archiveContext(dir, name) {
 }
 
 // Moves an archived context back to the active store.
-// If the name collides with an existing active context, appends _restored_N.
+// Appends _restored_N on name collision.
 function restoreArchivedContext(archiveName) {
     const archiveDir = getArchiveDir();
     const src        = path.join(archiveDir, `${archiveName}.json`);
     const dir        = getCtxDir();
     ensureDir(dir);
 
-    const baseName = archiveName.replace(/_\d{13}$/, ''); // strip timestamp suffix if present
-    let destName = baseName;
-    let dest     = path.join(dir, `${destName}.json`);
-    let counter  = 1;
+    const baseName = archiveName.replace(/_\d{13}$/, '');
+    let destName   = baseName;
+    let dest       = path.join(dir, `${destName}.json`);
+    let counter    = 1;
     while (fs.existsSync(dest)) {
         destName = `${baseName}_restored_${counter++}`;
         dest     = path.join(dir, `${destName}.json`);
@@ -138,8 +142,7 @@ function restoreArchivedContext(archiveName) {
     return destName;
 }
 
-// Returns subdirectory entries from the configured projectsRoot for the
-// new-context project picker. Reads aiContext.projectsRoot from settings.
+// Returns subdirectory entries from the configured projectsRoot.
 function listProjectDirs() {
     const projectsDir = getProjectsRoot();
     if (!fs.existsSync(projectsDir)) return [];
@@ -152,6 +155,56 @@ function listProjectDirs() {
     } catch {
         return [];
     }
+}
+
+// Scans projectsRoot and creates a context entry for any subdirectory that
+// doesn't already have a matching context (matched by root path).
+// Returns an array of newly created context names.
+function scanAndCreateContexts(dir, projectsRoot) {
+    const normalized = normalizePath(projectsRoot);
+    if (!normalized || !fs.existsSync(normalized)) return [];
+
+    // Build set of all roots already tracked
+    const existingRoots = new Set(
+        listContexts(dir)
+            .map(name => normalizePath(loadContext(dir, name).root))
+            .filter(Boolean)
+    );
+
+    const created = [];
+    try {
+        const entries = fs.readdirSync(normalized).filter(f => {
+            try { return fs.statSync(path.join(normalized, f)).isDirectory(); } catch { return false; }
+        });
+
+        for (const entry of entries) {
+            const projectPath = normalizePath(path.join(normalized, entry));
+            if (!existingRoots.has(projectPath)) {
+                // Use entry name as context name; avoid collision
+                let ctxName  = entry;
+                let counter  = 1;
+                while (fs.existsSync(path.join(dir, `${ctxName}.json`))) {
+                    ctxName = `${entry}_${counter++}`;
+                }
+                saveContext(dir, ctxName, {
+                    v:         1,
+                    u:         os.userInfo().username,
+                    p:         entry,
+                    root:      projectPath,
+                    t:         'init',
+                    s:         {},
+                    a:         [],
+                    e:         null,
+                    i:         '',
+                    createdAt: new Date().toISOString(),
+                });
+                created.push(ctxName);
+            }
+        }
+    } catch {
+        // Ignore scan errors (permission issues, etc.)
+    }
+    return created;
 }
 
 function formatRelativeTime(isoString) {
@@ -186,5 +239,6 @@ module.exports = {
     archiveContext,
     restoreArchivedContext,
     listProjectDirs,
+    scanAndCreateContexts,
     formatRelativeTime,
 };

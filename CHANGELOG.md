@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.0] — 2026-04-29
+
+### Added
+
+- **`AI: Config` command** (`Ctrl+Alt+C`) — interactive configuration menu that stays
+  open after each change, showing current values inline. Covers all 8 settings without
+  needing to edit `settings.json` manually.
+- **`aiContext.scanOnLaunch`** — on every VS Code launch, scans `projectsRoot` and
+  auto-creates context entries for any subdirectories not already tracked. Notifications
+  report newly discovered projects.
+- **`aiContext.cliPath`** — full path to the `claude` binary for WSL setups where it
+  isn't on PATH. Used in `AI: Run Task`; error message now includes the configured path.
+- **`aiContext.autoDetect`** — toggle to disable automatic context detection on folder
+  open (manual-only mode via `Ctrl+Alt+S`).
+- **`aiContext.showNotifications`** — toggle all informational notification messages.
+- **`aiContext.autoGitignore`** — when enabled, automatically appends injected file
+  names to `.gitignore` in the project root on every inject.
+- **`aiContext.contextDir`** — override the context store from `~/.ai-context` to any
+  absolute path. `getCtxDir()` and `getArchiveDir()` both respect this setting.
+- **`aiContext.maxActions`** — cap the `a[]` action history array; enforced in
+  `saveContext()` on every write.
+- **`scanAndCreateContexts()`** in `context.js` — scans a directory, checks existing
+  roots, and creates minimal context entries for untracked projects.
+- **`getCliPath()`** exported from `claude.js` — used in Run Task progress title so
+  the user always sees which binary is being called.
+
+### Changed
+
+- `getCtxDir()` reads `aiContext.contextDir` before falling back to `~/.ai-context`.
+- `getArchiveDir()` derives from `getCtxDir()` instead of hardcoding the path.
+- `saveContext()` trims `ctx.a` to `maxActions` on every write.
+- `createContextWithRoot()` pre-fills the path input with `getProjectsRoot()` instead
+  of always showing `~/projects`.
+- `AI: Run Task` progress title now shows the CLI path being invoked.
+- CLI not-found error message includes the configured path for easier debugging.
+
+---
+
 ## [2.4.0] — 2026-04-29
 
 ### Added
