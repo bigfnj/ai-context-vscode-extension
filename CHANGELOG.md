@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.9.1] - 2026-04-30
+
+### Added
+
+- **AI: Reinject Active Context** command (`Ctrl+Alt+R` / `Cmd+Alt+R`): re-injects
+  the current active context into all configured agent files (CLAUDE.md, AGENTS.md,
+  .github/copilot-instructions.md, etc.) in one keystroke. Intended as a manual
+  recovery after a Claude Code or Codex conversation compaction — re-inject, then
+  tell the agent to re-read its context file and resume from `AI_CONTEXT_V3`.
+
+---
+
 ## [2.9.0] - 2026-04-30
 
 ### Fixed

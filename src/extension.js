@@ -28,6 +28,7 @@ const {
     clearCodexBootstrap,
     clearInjectionForContext,
     getAgents,
+    getInjectionTargets,
     AGENT_TARGETS,
 } = require('./inject');
 const { getCliPath, buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude } = require('./claude');
@@ -844,9 +845,28 @@ function activate(context) {
         }
     });
 
+    // ── AI: Reinject Active Context ───────────────────────────────────────────
+    const reinjectCmd = vscode.commands.registerCommand('ai.reinjectContext', () => {
+        const name = getActive(trackedWsState);
+        if (!name) {
+            vscode.window.showWarningMessage('AI Context: no active context — use "AI: Set Active Context" first.');
+            return;
+        }
+        const ctx     = loadContext(dir, name);
+        const injected = autoInject(ctx);
+        if (!injected) {
+            vscode.window.showWarningMessage(`[${name}] root path is missing or invalid — nothing injected.`);
+            return;
+        }
+        const targets = getInjectionTargets(normalizePath(ctx.root))
+            .map(f => path.basename(f))
+            .join(', ');
+        vscode.window.showInformationMessage(`[${name}] reinjected into: ${targets}`);
+    });
+
     context.subscriptions.push(
         configCmd, setActiveCmd, runTask, viewContext, newContext,
-        deleteCtx, cleanUp, restoreCtx, watcher
+        deleteCtx, cleanUp, restoreCtx, reinjectCmd, watcher
     );
 }
 

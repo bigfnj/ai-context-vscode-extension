@@ -2,7 +2,7 @@
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
   "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "publisher": "local",
   "scripts": {
     "test": "node test/run-unit.js"
@@ -49,6 +49,10 @@
         "title": "AI: Restore Archived Context"
       },
       {
+        "command": "ai.reinjectContext",
+        "title": "AI: Reinject Active Context"
+      },
+      {
         "command": "ai.config",
         "title": "AI: Config"
       }
@@ -63,6 +67,11 @@
         "command": "ai.setActiveContext",
         "key": "ctrl+alt+s",
         "mac": "cmd+alt+s"
+      },
+      {
+        "command": "ai.reinjectContext",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
       },
       {
         "command": "ai.config",
