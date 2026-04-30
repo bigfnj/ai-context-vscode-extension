@@ -7,6 +7,10 @@ const path = require('path');
 const settings = {
     agents: ['claude', 'codex', 'copilot'],
     autoGitignore: false,
+    autoDetect: true,
+    codexProjectSwitchBootstrap: true,
+    followActiveEditor: true,
+    followTerminalCwd: true,
     maxActions: 3,
 };
 
@@ -26,6 +30,10 @@ const mockVscode = {
         openTextDocument: async doc => doc,
     },
     window: {
+        activeTerminal: null,
+        activeTextEditor: null,
+        onDidChangeActiveTerminal: () => ({ dispose: () => {} }),
+        onDidChangeActiveTextEditor: () => ({ dispose: () => {} }),
         showInformationMessage: async () => undefined,
         showWarningMessage: async () => undefined,
         showErrorMessage: async () => undefined,
@@ -160,6 +168,49 @@ function testPathContainment() {
     assert.strictEqual(isSameOrChildPath('/tmp/Project', '/tmp/ProjectX'), false);
 }
 
+function testCurrentLocationPathHelpers() {
+    const { getEditorPath, getTerminalCwd } = extension.__test;
+    assert.strictEqual(
+        getEditorPath({ document: { uri: { scheme: 'file', fsPath: '/tmp/Project/' } } }),
+        '/tmp/Project'
+    );
+    assert.strictEqual(
+        getEditorPath({ document: { uri: { scheme: 'untitled', fsPath: '/tmp/Project' } } }),
+        null
+    );
+    assert.strictEqual(
+        getTerminalCwd({ shellIntegration: { cwd: { fsPath: '/tmp/Project/src/' } } }),
+        '/tmp/Project/src'
+    );
+    assert.strictEqual(
+        getTerminalCwd({ shellIntegration: { cwd: '/tmp/Project/src/' } }),
+        '/tmp/Project/src'
+    );
+}
+
+function testSyncActiveContextForPath() {
+    const ctxDir  = tmpDir();
+    const project = tmpDir();
+    context.saveContext(ctxDir, 'Project', context.createDefaultContext('Project', project));
+
+    let active = null;
+    const wsState = {
+        get: () => active,
+        update: async (_key, value) => { active = value; },
+    };
+
+    const matched = extension.__test.syncActiveContextForPath(
+        ctxDir,
+        wsState,
+        path.join(project, 'src'),
+        { notify: false }
+    );
+
+    assert.strictEqual(matched, 'Project');
+    assert.strictEqual(active, 'Project');
+    assert.ok(fs.readFileSync(path.join(project, 'AGENTS.md'), 'utf8').includes(inject.AGENT_CONTEXT_NAME));
+}
+
 function testInjectionMarkerRepair() {
     const dir = tmpDir();
     const file = path.join(dir, 'AGENTS.md');
@@ -192,6 +243,30 @@ function testInvalidRootIsSkipped() {
     assert.strictEqual(fs.existsSync(path.join(missingRoot, 'AGENTS.md')), false);
 }
 
+function testCodexBootstrapInjection() {
+    const dir = tmpDir();
+    const file = path.join(dir, 'AGENTS.md');
+
+    assert.strictEqual(inject.autoInjectCodexBootstrap(dir), true);
+    inject.autoInjectCodexBootstrap(dir);
+
+    const bootstrapped = fs.readFileSync(file, 'utf8');
+    assert.strictEqual(count(bootstrapped, inject.BOOTSTRAP_START), 1);
+    assert.strictEqual(count(bootstrapped, inject.BOOTSTRAP_END), 1);
+    assert.ok(bootstrapped.includes(`Projects root: ${dir}`));
+    assert.ok(bootstrapped.includes('Immediately read the nearest AGENTS.md'));
+
+    inject.injectIntoFile(file, 'context block');
+    const withContext = fs.readFileSync(file, 'utf8');
+    assert.strictEqual(count(withContext, inject.BOOTSTRAP_START), 1);
+    assert.strictEqual(count(withContext, inject.INJECT_START), 1);
+
+    inject.clearInjection(file);
+    const afterClear = fs.readFileSync(file, 'utf8');
+    assert.ok(afterClear.includes(inject.BOOTSTRAP_START));
+    assert.ok(!afterClear.includes(inject.INJECT_START));
+}
+
 function testCodexTargetsNestedGitRoots() {
     const dir = tmpDir();
     const nestedRepo = path.join(dir, 'nested-repo');
@@ -220,6 +295,46 @@ function testCodexTargetsDedupRootGitRepo() {
     settings.agents = ['codex'];
 
     assert.deepStrictEqual(inject.getInjectionTargets(dir), [path.join(dir, 'AGENTS.md')]);
+
+    settings.agents = previousAgents;
+}
+
+function testKiloTargetsAgentMd() {
+    const dir = tmpDir();
+    const nestedRepo = path.join(dir, 'nested-repo');
+    fs.mkdirSync(path.join(nestedRepo, '.git'), { recursive: true });
+
+    const previousAgents = settings.agents;
+    settings.agents = ['kilo'];
+
+    const targets = inject.getInjectionTargets(dir)
+        .map(filePath => path.relative(dir, filePath).replace(/\\/g, '/'))
+        .sort();
+
+    assert.deepStrictEqual(targets, [
+        'AGENTS.md',
+        'nested-repo/AGENTS.md',
+    ]);
+
+    settings.agents = previousAgents;
+}
+
+function testCodexKiloTargetsDeduplicate() {
+    const dir = tmpDir();
+    const nestedRepo = path.join(dir, 'nested-repo');
+    fs.mkdirSync(path.join(nestedRepo, '.git'), { recursive: true });
+
+    const previousAgents = settings.agents;
+    settings.agents = ['codex', 'kilo'];
+
+    const targets = inject.getInjectionTargets(dir)
+        .map(filePath => path.relative(dir, filePath).replace(/\\/g, '/'))
+        .sort();
+
+    assert.deepStrictEqual(targets, [
+        'AGENTS.md',
+        'nested-repo/AGENTS.md',
+    ]);
 
     settings.agents = previousAgents;
 }
@@ -276,10 +391,15 @@ testContextMemoryNormalization();
 testHistoryCap();
 testCompactInjectionProjection();
 testPathContainment();
+testCurrentLocationPathHelpers();
+testSyncActiveContextForPath();
 testInjectionMarkerRepair();
 testInvalidRootIsSkipped();
+testCodexBootstrapInjection();
 testCodexTargetsNestedGitRoots();
 testCodexTargetsDedupRootGitRepo();
+testKiloTargetsAgentMd();
+testCodexKiloTargetsDeduplicate();
 testAutoInjectWritesNestedCodexTargets();
 testGitignoreUsesNestedGitRoot();
 testContextUpdateParsing();

@@ -2,7 +2,7 @@
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
   "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
-  "version": "2.8.2",
+  "version": "2.8.3",
   "publisher": "local",
   "scripts": {
     "test": "node test/run-unit.js"
@@ -85,7 +85,7 @@
             "type": "string",
             "enum": ["claude", "codex", "copilot", "cursor", "windsurf", "kilo"]
           },
-          "markdownDescription": "AI agents to inject context for on workspace open.\n\n| Value | File written |\n|---|---|\n| `claude` | `CLAUDE.md` |\n| `codex` | `AGENTS.md` |\n| `copilot` | `.github/copilot-instructions.md` |\n| `cursor` | `.cursorrules` |\n| `windsurf` | `.windsurfrules` |\n| `kilo` | `KILO.md` |"
+          "markdownDescription": "AI agents to inject context for on workspace open.\n\n| Value | File written |\n|---|---|\n| `claude` | `CLAUDE.md` |\n| `codex` | `AGENTS.md` |\n| `copilot` | `.github/copilot-instructions.md` |\n| `cursor` | `.cursorrules` |\n| `windsurf` | `.windsurfrules` |\n| `kilo` | `AGENTS.md` |"
         },
         "aiContext.cliPath": {
           "type": "string",
@@ -96,6 +96,21 @@
           "type": "boolean",
           "default": true,
           "description": "Auto-detect and load the matching context when opening a project folder."
+        },
+        "aiContext.followActiveEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-switch to the matching context when the active editor belongs to another tracked project."
+        },
+        "aiContext.followTerminalCwd": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-switch to the matching context when VS Code shell integration reports that the active terminal moved into another tracked project."
+        },
+        "aiContext.codexProjectSwitchBootstrap": {
+          "type": "boolean",
+          "default": true,
+          "description": "Write a lightweight AGENTS.md bootstrap into projectsRoot so Codex sessions started above a project know to read the target project's AGENTS.md after project switches."
         },
         "aiContext.scanOnLaunch": {
           "type": "boolean",

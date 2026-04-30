@@ -5,6 +5,8 @@ const { ensureDir, normalizePath } = require('./context');
 
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
+const BOOTSTRAP_START = '<!-- AI_CTX_BOOTSTRAP_START -->';
+const BOOTSTRAP_END   = '<!-- AI_CTX_BOOTSTRAP_END -->';
 const AGENT_CONTEXT_NAME = 'AI_CONTEXT_V3';
 const CODEX_REPO_SCAN_MAX_DEPTH = 4;
 const CODEX_REPO_SCAN_SKIP_DIRS = new Set([
@@ -153,19 +155,23 @@ function buildInjectionBlock(ctx) {
     ].join('\n');
 }
 
-function findInjectionRange(content) {
-    const start = content.indexOf(INJECT_START);
+function findMarkedRange(content, startMarker, endMarker) {
+    const start = content.indexOf(startMarker);
     if (start === -1) return null;
-    const endStart = content.indexOf(INJECT_END, start);
-    const end      = endStart === -1 ? content.length : endStart + INJECT_END.length;
+    const endStart = content.indexOf(endMarker, start);
+    const end      = endStart === -1 ? content.length : endStart + endMarker.length;
     return { start, end };
 }
 
-function injectIntoFile(filePath, blockContent) {
+function findInjectionRange(content) {
+    return findMarkedRange(content, INJECT_START, INJECT_END);
+}
+
+function injectMarkedBlock(filePath, blockContent, startMarker, endMarker) {
     ensureDir(path.dirname(filePath));
     const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
-    const block  = `${INJECT_START}\n${blockContent}\n${INJECT_END}`;
-    const range  = findInjectionRange(existing);
+    const block  = `${startMarker}\n${blockContent}\n${endMarker}`;
+    const range  = findMarkedRange(existing, startMarker, endMarker);
 
     if (range) {
         fs.writeFileSync(filePath, existing.slice(0, range.start) + block + existing.slice(range.end));
@@ -175,16 +181,67 @@ function injectIntoFile(filePath, blockContent) {
     }
 }
 
-function clearInjection(filePath) {
+function injectIntoFile(filePath, blockContent) {
+    injectMarkedBlock(filePath, blockContent, INJECT_START, INJECT_END);
+}
+
+function clearMarkedBlock(filePath, startMarker, endMarker) {
     if (!fs.existsSync(filePath)) return;
     const content = fs.readFileSync(filePath, 'utf8');
-    const range   = findInjectionRange(content);
+    const range   = findMarkedRange(content, startMarker, endMarker);
     if (!range) return;
 
     const before = content.slice(0, range.start).trimEnd();
     const after  = content.slice(range.end).trimStart();
     const next   = [before, after].filter(Boolean).join('\n\n');
     fs.writeFileSync(filePath, next ? `${next}\n` : '');
+}
+
+function clearInjection(filePath) {
+    clearMarkedBlock(filePath, INJECT_START, INJECT_END);
+}
+
+function buildCodexBootstrapBlock(projectsRoot) {
+    const root = normalizePath(projectsRoot || '');
+    return [
+        '# AI Context Project Switch Bootstrap',
+        '',
+        `Projects root: ${root || '(not configured)'}`,
+        '',
+        'When the user asks to move, cd, switch, open, or start work in a project under this root:',
+        '1. Resolve the target project directory.',
+        '2. Immediately read the nearest AGENTS.md from that target directory before answering or doing project work.',
+        `3. If AGENTS.md contains ${AGENT_CONTEXT_NAME}, treat it as the authoritative session state.`,
+        '4. If the target is inside a nested Git repository, prefer the nearest AGENTS.md in that repository.',
+        '',
+        'A shell cd, tool workdir change, or VS Code terminal cwd change does not reload an already-running Codex conversation automatically.',
+        'The target project AGENTS.md is the handoff source after a project switch.',
+    ].join('\n');
+}
+
+function getCodexBootstrapTarget(projectsRoot) {
+    const root = normalizePath(projectsRoot || '');
+    return root ? path.join(root, 'AGENTS.md') : null;
+}
+
+function autoInjectCodexBootstrap(projectsRoot) {
+    const target = getCodexBootstrapTarget(projectsRoot);
+    if (!target) return false;
+    try {
+        const root = path.dirname(target);
+        if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return false;
+        injectMarkedBlock(target, buildCodexBootstrapBlock(projectsRoot), BOOTSTRAP_START, BOOTSTRAP_END);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function clearCodexBootstrap(projectsRoot) {
+    const target = getCodexBootstrapTarget(projectsRoot);
+    if (!target) return false;
+    clearMarkedBlock(target, BOOTSTRAP_START, BOOTSTRAP_END);
+    return true;
 }
 
 function getGitignoreRoot(projectRoot, filePath) {
@@ -281,6 +338,8 @@ function clearInjectionForContext(ctx) {
 module.exports = {
     INJECT_START,
     INJECT_END,
+    BOOTSTRAP_START,
+    BOOTSTRAP_END,
     AGENT_CONTEXT_NAME,
     AGENT_TARGETS,
     getAgents,
@@ -289,11 +348,15 @@ module.exports = {
     getCodexTargets,
     buildAgentContext,
     buildInjectionBlock,
+    buildCodexBootstrapBlock,
     findInjectionRange,
     getGitignoreRoot,
     getValidContextRoot,
     injectIntoFile,
     clearInjection,
+    getCodexBootstrapTarget,
+    autoInjectCodexBootstrap,
+    clearCodexBootstrap,
     updateGitignore,
     clearInjectionForContext,
     autoInject,

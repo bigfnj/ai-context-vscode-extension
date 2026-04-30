@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.8.3] - 2026-04-30
+
+### Added
+
+- Active-editor and integrated-terminal following: the window can now switch to
+  the matching context when the current file or VS Code shell-integration cwd
+  moves into another tracked project.
+- `aiContext.followActiveEditor` and `aiContext.followTerminalCwd` settings to
+  control the new current-location following behavior.
+- `aiContext.codexProjectSwitchBootstrap`, which writes a lightweight
+  `projectsRoot/AGENTS.md` bootstrap for Codex sessions launched from the parent
+  projects folder. The bootstrap tells Codex to read the target project's nearest
+  `AGENTS.md` after a project switch request.
+
+### Changed
+
+- Auto-detection logic is centralized so startup, workspace-folder changes,
+  active-editor changes, and terminal cwd changes all use the same best-match
+  context selection.
+
+---
+
 ## [2.8.2] — 2026-04-30
 
 ### Fixed

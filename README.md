@@ -17,6 +17,11 @@ VS Code opens a project folder
   → injects into CLAUDE.md + AGENTS.md + .github/copilot-instructions.md
   → open Claude Code, Codex, Copilot — context already there
 
+Active editor or terminal moves into another tracked project
+  → extension matches that current path
+  → switches the window's active context
+  → refreshes the same agent files for the new project
+
 Task runs → Claude responds with CTX_UPDATE:
   → context JSON saved to ~/.ai-context/
   → file watcher fires
@@ -32,6 +37,13 @@ For Codex, `AGENTS.md` is also written into nested Git repository roots found
 under the context root. Codex scopes model-visible instructions to its current
 working root, so a workspace like `/home/Vibe-Projects/AIContext` with a nested
 repo at `AIContext/ai-context-extension` needs an `AGENTS.md` in both places.
+
+If `projectsRoot` is configured and Codex is enabled, the extension also writes
+a lightweight bootstrap block to `projectsRoot/AGENTS.md`. That bootstrap tells
+Codex sessions started from the parent projects folder to read the target
+project's nearest `AGENTS.md` immediately after the user asks to move or switch
+projects. This covers the case where the agent starts in `/home/Vibe-Projects`
+and the user then asks it to move into a child project.
 
 Multiple windows work independently. Each window auto-detects its own context on
 open. Changing the active context in one window does not affect any other window.
@@ -49,7 +61,7 @@ take effect on reload without repackaging:
 ```bash
 mkdir -p ~/.vscode-server/extensions
 ln -s /home/Vibe-Projects/AIContext/ai-context-extension \
-      ~/.vscode-server/extensions/local.ai-context-runner-2.8.0
+      ~/.vscode-server/extensions/local.ai-context-runner-2.8.3
 ```
 
 Then reload VS Code:
@@ -74,6 +86,9 @@ Open VS Code Settings (`Ctrl+,`) and search for **AI Context**:
 | `aiContext.agents` | `["claude","codex","copilot"]` | Which AI agents receive context injection on workspace open. |
 | `aiContext.cliPath` | _(empty)_ | Full path to the `claude` binary. Uses `claude` from PATH when blank. |
 | `aiContext.autoDetect` | `true` | Auto-load matching context when opening a project folder. |
+| `aiContext.followActiveEditor` | `true` | Auto-switch context when the active editor belongs to another tracked project. |
+| `aiContext.followTerminalCwd` | `true` | Auto-switch context when VS Code shell integration reports a new active terminal directory. |
+| `aiContext.codexProjectSwitchBootstrap` | `true` | Write `projectsRoot/AGENTS.md` so Codex sessions started above projects read the target project's `AGENTS.md` after switches. |
 | `aiContext.scanOnLaunch` | `true` | Scan `projectsRoot` on launch and create context files for new projects. |
 | `aiContext.showNotifications` | `true` | Show informational context load/switch notifications. |
 | `aiContext.autoGitignore` | `false` | Add injected agent files to project `.gitignore`. |
@@ -89,7 +104,7 @@ Open VS Code Settings (`Ctrl+,`) and search for **AI Context**:
 | `copilot` | `.github/copilot-instructions.md` |
 | `cursor` | `.cursorrules` |
 | `windsurf` | `.windsurfrules` |
-| `kilo` | `KILO.md` |
+| `kilo` | `AGENTS.md` in the context root and nested Git repo roots |
 
 ### WSL example (`settings.json`)
 
@@ -138,6 +153,13 @@ When you open a project folder, the extension:
 `/home/Vibe-Projects/ProjectB`, opening either folder loads the correct context
 automatically.
 
+With `aiContext.followActiveEditor` enabled, activating a file in another tracked
+project also switches to that project's context. With `aiContext.followTerminalCwd`
+enabled, the extension follows the active integrated terminal directory when VS
+Code shell integration reports it. Terminal following depends on VS Code shell
+integration; external terminals and agent-internal tool `workdir` changes are not
+VS Code events.
+
 ### Codex and nested Git repos
 
 Codex reads `AGENTS.md` from the working root it runs in. If VS Code is opened at
@@ -154,6 +176,18 @@ codex debug prompt-input "probe context"
 
 The output should include an `AGENTS.md instructions for ...` block containing
 `AI_CONTEXT_V3`.
+
+### Codex project switch bootstrap
+
+Codex builds its prompt from files visible at session start. A later shell `cd`,
+tool `workdir` change, or user instruction to "move into ProjectB" does not by
+itself make an already-running Codex conversation re-read ProjectB's `AGENTS.md`.
+
+When `aiContext.codexProjectSwitchBootstrap` is enabled, AI Context Runner writes
+a small instruction block into `projectsRoot/AGENTS.md`. If Codex starts from the
+parent projects folder, that root instruction tells it to read the target
+project's nearest `AGENTS.md` after a project switch request and then use any
+`AI_CONTEXT_V3` it finds there as the authoritative session state.
 
 ## Context storage
 
@@ -244,7 +278,6 @@ compaction metadata to reduce token cost for agents.
 ```gitignore
 CLAUDE.md
 AGENTS.md
-KILO.md
 .cursorrules
 .windsurfrules
 .github/copilot-instructions.md

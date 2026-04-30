@@ -21,7 +21,14 @@ const {
     formatRelativeTime,
 } = require('./context');
 
-const { autoInject, clearInjectionForContext, getAgents, AGENT_TARGETS } = require('./inject');
+const {
+    autoInject,
+    autoInjectCodexBootstrap,
+    clearCodexBootstrap,
+    clearInjectionForContext,
+    getAgents,
+    AGENT_TARGETS,
+} = require('./inject');
 const { getCliPath, buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude } = require('./claude');
 
 const ACTIVE_KEY = 'ai.activeContext';
@@ -79,6 +86,43 @@ function detectContextForPath(dir, workspaceRoot) {
         }
     }
     return matchedName;
+}
+
+function getEditorPath(editor) {
+    const uri = editor && editor.document && editor.document.uri;
+    if (!uri || !uri.fsPath) return null;
+    if (uri.scheme && uri.scheme !== 'file') return null;
+    return normalizePath(uri.fsPath);
+}
+
+function getTerminalCwd(terminal) {
+    const cwd = terminal && terminal.shellIntegration && terminal.shellIntegration.cwd;
+    if (!cwd) return null;
+    if (typeof cwd === 'string') return normalizePath(cwd);
+    return cwd.fsPath ? normalizePath(cwd.fsPath) : null;
+}
+
+function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
+    if (!candidatePath || getCfg().get('autoDetect') === false) return null;
+
+    const matched  = detectContextForPath(dir, candidatePath);
+    const previous = getActive(wsState);
+
+    if (matched) {
+        setActive(wsState, matched);
+        autoInject(loadContext(dir, matched));
+        if (matched !== previous && options.notify !== false) {
+            notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
+        }
+        return matched;
+    }
+
+    if (options.fallbackPrevious && previous) {
+        autoInject(loadContext(dir, previous));
+        return previous;
+    }
+
+    return null;
 }
 
 // ── Context creation helpers ──────────────────────────────────────────────────
@@ -169,6 +213,16 @@ function activate(context) {
     const dir     = getCtxDir();
     const wsState = context.workspaceState;
 
+    const hasCodexLikeAgent = () => getAgents().some(agent => agent === 'codex' || agent === 'kilo');
+    const syncCodexBootstrap = () => {
+        const projectsRoot = getProjectsRoot();
+        if (getCfg().get('codexProjectSwitchBootstrap') === false || !hasCodexLikeAgent()) {
+            clearCodexBootstrap(projectsRoot);
+            return false;
+        }
+        return autoInjectCodexBootstrap(projectsRoot);
+    };
+
     // ── Scan projectsRoot for new projects ────────────────────────────────────
     if (getCfg().get('scanOnLaunch') !== false) {
         const projectsRoot = getProjectsRoot();
@@ -180,21 +234,14 @@ function activate(context) {
         }
     }
 
+    syncCodexBootstrap();
+
     // ── Auto-detect context on startup ────────────────────────────────────────
     if (getCfg().get('autoDetect') !== false) {
-        const workspaceRoot = getWorkspaceRoot();
-        const matched       = detectContextForPath(dir, workspaceRoot);
-        const previous      = getActive(wsState);
-
-        if (matched) {
-            setActive(wsState, matched);
-            autoInject(loadContext(dir, matched));
-            if (matched !== previous) {
-                notify(`AI Context: auto-loaded [${matched}]`);
-            }
-        } else if (previous) {
-            autoInject(loadContext(dir, previous));
-        }
+        syncActiveContextForPath(dir, wsState, getWorkspaceRoot(), {
+            action: 'auto-loaded',
+            fallbackPrevious: true,
+        });
     } else if (getActive(wsState)) {
         autoInject(loadContext(dir, getActive(wsState)));
     }
@@ -217,18 +264,42 @@ function activate(context) {
     // ── Re-detect when workspace folders change ───────────────────────────────
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
-            if (getCfg().get('autoDetect') === false) return;
-            const root    = getWorkspaceRoot();
-            const matched = detectContextForPath(dir, root);
-            const current = getActive(wsState);
-
-            if (matched && matched !== current) {
-                setActive(wsState, matched);
-                autoInject(loadContext(dir, matched));
-                notify(`AI Context: switched to [${matched}]`);
-            }
+            syncCodexBootstrap();
+            syncActiveContextForPath(dir, wsState, getWorkspaceRoot());
         })
     );
+
+    const syncEditorContext = editor => {
+        if (getCfg().get('followActiveEditor') === false) return;
+        syncActiveContextForPath(dir, wsState, getEditorPath(editor));
+    };
+
+    const syncTerminalContext = terminal => {
+        if (getCfg().get('followTerminalCwd') === false) return;
+        syncActiveContextForPath(dir, wsState, getTerminalCwd(terminal));
+    };
+
+    if (typeof vscode.window.onDidChangeActiveTextEditor === 'function') {
+        context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(syncEditorContext));
+        syncEditorContext(vscode.window.activeTextEditor);
+    }
+
+    if (typeof vscode.window.onDidChangeActiveTerminal === 'function') {
+        context.subscriptions.push(vscode.window.onDidChangeActiveTerminal(syncTerminalContext));
+        syncTerminalContext(vscode.window.activeTerminal);
+    }
+
+    if (typeof vscode.window.onDidChangeTerminalShellIntegration === 'function') {
+        context.subscriptions.push(vscode.window.onDidChangeTerminalShellIntegration(event => {
+            syncTerminalContext(event && event.terminal ? event.terminal : vscode.window.activeTerminal);
+        }));
+    }
+
+    if (typeof vscode.window.onDidEndTerminalShellExecution === 'function') {
+        context.subscriptions.push(vscode.window.onDidEndTerminalShellExecution(event => {
+            syncTerminalContext(event && event.terminal ? event.terminal : vscode.window.activeTerminal);
+        }));
+    }
 
     // ── AI: Config ────────────────────────────────────────────────────────────
     const agentLabels = {
@@ -237,7 +308,7 @@ function activate(context) {
         copilot:  'GitHub Copilot  →  .github/copilot-instructions.md',
         cursor:   'Cursor  →  .cursorrules',
         windsurf: 'Windsurf  →  .windsurfrules',
-        kilo:     'Kilo  →  KILO.md',
+        kilo:     'Kilo  →  AGENTS.md',
     };
 
     const configCmd = vscode.commands.registerCommand('ai.config', async () => {
@@ -252,6 +323,9 @@ function activate(context) {
 
             const agents       = arr('agents', ['claude', 'codex', 'copilot']);
             const autoDetect   = cfg.get('autoDetect') !== false;
+            const followEditor = cfg.get('followActiveEditor') !== false;
+            const followTerm   = cfg.get('followTerminalCwd') !== false;
+            const bootstrap    = cfg.get('codexProjectSwitchBootstrap') !== false;
             const scanOnLaunch = cfg.get('scanOnLaunch') !== false;
             const showNotif    = cfg.get('showNotifications') !== false;
             const autoGit      = cfg.get('autoGitignore') === true;
@@ -288,6 +362,27 @@ function activate(context) {
                     description: autoDetect   ? 'on' : 'off',
                     detail:      'Auto-load matching context when a project folder is opened',
                     _key:        'autoDetect',
+                    _type:       'boolean',
+                },
+                {
+                    label:       `$(edit)  Follow Active Editor  ${followEditor ? '$(check)' : '$(circle-slash)'}`,
+                    description: followEditor ? 'on' : 'off',
+                    detail:      'Auto-switch context when the active file is in another tracked project',
+                    _key:        'followActiveEditor',
+                    _type:       'boolean',
+                },
+                {
+                    label:       `$(terminal)  Follow Terminal CWD  ${followTerm ? '$(check)' : '$(circle-slash)'}`,
+                    description: followTerm ? 'on' : 'off',
+                    detail:      'Auto-switch context when VS Code shell integration reports a new terminal directory',
+                    _key:        'followTerminalCwd',
+                    _type:       'boolean',
+                },
+                {
+                    label:       `$(root-folder)  Codex Root Bootstrap  ${bootstrap ? '$(check)' : '$(circle-slash)'}`,
+                    description: bootstrap ? 'on' : 'off',
+                    detail:      'Write projectsRoot/AGENTS.md so Codex reads project context after a project switch',
+                    _key:        'codexProjectSwitchBootstrap',
                     _type:       'boolean',
                 },
                 {
@@ -341,6 +436,8 @@ function activate(context) {
 
             if (!pick || pick._key === null) return;
 
+            const previousProjectsRoot = getProjectsRoot();
+
             // ── Toggle boolean ──────────────────────────────────────────────
             if (pick._type === 'boolean') {
                 const current = cfg.get(pick._key) !== false;
@@ -387,6 +484,11 @@ function activate(context) {
                     await cfg.update(pick._key, input.trim() || undefined, vscode.ConfigurationTarget.Global);
                 }
             }
+
+            if (pick._key === 'projectsRoot' && previousProjectsRoot !== getProjectsRoot()) {
+                clearCodexBootstrap(previousProjectsRoot);
+            }
+            syncCodexBootstrap();
         }
     });
 
@@ -682,4 +784,14 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, __test: { detectContextForPath, isSameOrChildPath } };
+module.exports = {
+    activate,
+    deactivate,
+    __test: {
+        detectContextForPath,
+        getEditorPath,
+        getTerminalCwd,
+        isSameOrChildPath,
+        syncActiveContextForPath,
+    },
+};
