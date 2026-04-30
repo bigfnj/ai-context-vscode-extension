@@ -155,6 +155,7 @@ function normalizeContext(ctx, name) {
     const src  = ctx && typeof ctx === 'object' ? ctx : {};
     const compacted = compactActions(src.a, src.h, getMaxActions());
     const srcMeta = asObject(src.m);
+    const srcMem  = asObject(src.mem); // fallback for old injected mem:{b,d,c,f} format
     const m = {
         ...base.m,
         ...srcMeta,
@@ -171,10 +172,10 @@ function normalizeContext(ctx, name) {
         t:         src.t || base.t,
         s:         asObject(src.s),
         n:         src.n || '',
-        b:         trimList(src.b, MEMORY_LIMITS.b),
-        d:         trimList(src.d, MEMORY_LIMITS.d),
-        c:         trimList(src.c, MEMORY_LIMITS.c),
-        f:         trimList(src.f, MEMORY_LIMITS.f),
+        b:         trimList(Array.isArray(src.b) ? src.b : srcMem.b, MEMORY_LIMITS.b),
+        d:         trimList(Array.isArray(src.d) ? src.d : srcMem.d, MEMORY_LIMITS.d),
+        c:         trimList(Array.isArray(src.c) ? src.c : srcMem.c, MEMORY_LIMITS.c),
+        f:         trimList(Array.isArray(src.f) ? src.f : srcMem.f, MEMORY_LIMITS.f),
         h:         compacted.history,
         a:         compacted.actions,
         e:         src.e === undefined ? null : src.e,

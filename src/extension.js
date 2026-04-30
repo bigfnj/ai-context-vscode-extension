@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 const {
     getCtxDir,
@@ -102,6 +103,29 @@ function getTerminalCwd(terminal) {
     return cwd.fsPath ? normalizePath(cwd.fsPath) : null;
 }
 
+// Populates a fresh (t==='init') context with recent git log + status so the
+// AI has immediate project awareness instead of a blank slate.
+function bootstrapFromGit(dir, name) {
+    const ctx = loadContext(dir, name);
+    if (ctx.t !== 'init') return;
+    const root = ctx.root;
+    if (!root || !fs.existsSync(root)) return;
+    try {
+        const log    = execSync('git log --oneline -8', { cwd: root, timeout: 4000 }).toString().trim();
+        const status = execSync('git status --short',   { cwd: root, timeout: 4000 }).toString().trim();
+        if (!log && !status) return;
+        const actions = log ? log.split('\n').map(l => `git: ${l}`) : [];
+        const changed = status ? status.split('\n').length : 0;
+        saveContext(dir, name, {
+            ...ctx,
+            t: 'git_bootstrap',
+            n: 'Review recent commits and continue work.',
+            a: actions,
+            s: { ...ctx.s, ...(changed ? { untracked_or_modified: changed } : {}) },
+        });
+    } catch { /* git unavailable or not a repo — skip silently */ }
+}
+
 function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
     if (!candidatePath || getCfg().get('autoDetect') === false) return null;
 
@@ -110,6 +134,7 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
 
     if (matched) {
         setActive(wsState, matched);
+        bootstrapFromGit(dir, matched);
         autoInject(loadContext(dir, matched));
         if (matched !== previous && options.notify !== false) {
             notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
@@ -236,15 +261,41 @@ function activate(context) {
 
     syncCodexBootstrap();
 
+    // ── Status bar — shows active context name, click to switch ──────────────
+    const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+    statusBar.command = 'ai.setActiveContext';
+    statusBar.tooltip = 'AI Context — click to switch';
+    context.subscriptions.push(statusBar);
+
+    function updateStatusBar() {
+        const name = getActive(wsState);
+        if (name) {
+            statusBar.text = `$(database) ${name}`;
+            statusBar.show();
+        } else {
+            statusBar.hide();
+        }
+    }
+
+    // Wrap wsState so every setActive call refreshes the status bar.
+    const trackedWsState = {
+        get:    (...a) => wsState.get(...a),
+        update: async (key, value) => {
+            await wsState.update(key, value);
+            if (key === ACTIVE_KEY) updateStatusBar();
+        },
+    };
+
     // ── Auto-detect context on startup ────────────────────────────────────────
     if (getCfg().get('autoDetect') !== false) {
-        syncActiveContextForPath(dir, wsState, getWorkspaceRoot(), {
+        syncActiveContextForPath(dir, trackedWsState, getWorkspaceRoot(), {
             action: 'auto-loaded',
             fallbackPrevious: true,
         });
-    } else if (getActive(wsState)) {
-        autoInject(loadContext(dir, getActive(wsState)));
+    } else if (getActive(trackedWsState)) {
+        autoInject(loadContext(dir, getActive(trackedWsState)));
     }
+    updateStatusBar();
 
     // ── File watcher — re-inject on context JSON change; consume interactive CTX_UPDATE sidecars ──
     const watcher = vscode.workspace.createFileSystemWatcher(
@@ -270,7 +321,7 @@ function activate(context) {
 
         if (!basename.endsWith('.json')) return;
         const changedName = path.basename(uri.fsPath, '.json');
-        if (changedName === getActive(wsState)) {
+        if (changedName === getActive(trackedWsState)) {
             autoInject(loadContext(dir, changedName));
         }
     };
@@ -282,18 +333,18 @@ function activate(context) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             syncCodexBootstrap();
-            syncActiveContextForPath(dir, wsState, getWorkspaceRoot());
+            syncActiveContextForPath(dir, trackedWsState, getWorkspaceRoot());
         })
     );
 
     const syncEditorContext = editor => {
         if (getCfg().get('followActiveEditor') === false) return;
-        syncActiveContextForPath(dir, wsState, getEditorPath(editor));
+        syncActiveContextForPath(dir, trackedWsState, getEditorPath(editor));
     };
 
     const syncTerminalContext = terminal => {
         if (getCfg().get('followTerminalCwd') === false) return;
-        syncActiveContextForPath(dir, wsState, getTerminalCwd(terminal));
+        syncActiveContextForPath(dir, trackedWsState, getTerminalCwd(terminal));
     };
 
     if (typeof vscode.window.onDidChangeActiveTextEditor === 'function') {
@@ -519,7 +570,7 @@ function activate(context) {
             return;
         }
 
-        const current = getActive(wsState);
+        const current = getActive(trackedWsState);
         const agents  = getAgents().join(', ');
         const pick    = await vscode.window.showQuickPick(
             contexts.map(name => {
@@ -534,13 +585,13 @@ function activate(context) {
         );
         if (!pick) return;
 
-        await setActive(wsState, pick.label);
+        await setActive(trackedWsState, pick.label);
         showInjectionResult(pick.label, agents, autoInject(loadContext(dir, pick.label)));
     });
 
     // ── AI: Run Task ──────────────────────────────────────────────────────────
     const runTask = vscode.commands.registerCommand('ai.runTask', async () => {
-        const ctxName = await pickOrCreateContext(dir, wsState);
+        const ctxName = await pickOrCreateContext(dir, trackedWsState);
         if (!ctxName) return;
 
         const task = await vscode.window.showInputBox({
@@ -593,7 +644,7 @@ function activate(context) {
             return;
         }
 
-        const active = getActive(wsState);
+        const active = getActive(trackedWsState);
         const pick   = await vscode.window.showQuickPick(
             contexts.map(name => {
                 const ctx = loadContext(dir, name);
@@ -636,7 +687,7 @@ function activate(context) {
             'Yes', 'No'
         );
         if (makeActive === 'Yes') {
-            await setActive(wsState, name.trim());
+            await setActive(trackedWsState, name.trim());
             showInjectionResult(name.trim(), getAgents().join(', '), autoInject(loadContext(dir, name.trim())));
         }
     });
@@ -649,7 +700,7 @@ function activate(context) {
             return;
         }
 
-        const active = getActive(wsState);
+        const active = getActive(trackedWsState);
         const pick   = await vscode.window.showQuickPick(
             contexts.map(name => {
                 const ctx = loadContext(dir, name);
@@ -674,7 +725,7 @@ function activate(context) {
         deleteContext(dir, pick.label);
 
         if (pick.label === active) {
-            await setActive(wsState, null);
+            await setActive(trackedWsState, null);
             clearInjectionForContext(ctx);
             vscode.window.showInformationMessage(`[${pick.label}] deleted — injection blocks removed.`);
         } else {
@@ -690,7 +741,7 @@ function activate(context) {
             return;
         }
 
-        const active = getActive(wsState);
+        const active = getActive(trackedWsState);
         const items  = contexts.map(name => {
             const ctx      = loadContext(dir, name);
             const rootOk   = !!(ctx.root && fs.existsSync(normalizePath(ctx.root)));
@@ -748,7 +799,7 @@ function activate(context) {
                 deleteContext(dir, pick._name);
             }
             if (pick._name === active) {
-                await setActive(wsState, null);
+                await setActive(trackedWsState, null);
                 clearInjectionForContext(ctx);
             }
         }
@@ -788,7 +839,7 @@ function activate(context) {
             'Yes', 'No'
         );
         if (makeActive === 'Yes') {
-            await setActive(wsState, restoredName);
+            await setActive(trackedWsState, restoredName);
             showInjectionResult(restoredName, getAgents().join(', '), autoInject(loadContext(dir, restoredName)));
         }
     });

@@ -1,5 +1,6 @@
 const vscode = require('vscode');
 const { spawn } = require('child_process');
+const { buildAgentContext } = require('./inject');
 
 // Returns the configured CLI path, defaulting to 'claude' on PATH.
 function getCliPath() {
@@ -12,7 +13,7 @@ function buildPrompt(ctx, task) {
     return `You are resuming a prior AI session.
 
 <context>
-${JSON.stringify(ctx)}
+${JSON.stringify(buildAgentContext(ctx))}
 </context>
 
 Task: ${task}
@@ -27,7 +28,7 @@ Rules:
 - Use "h" for compacted summaries of older actions; preserve it unless you are deliberately summarizing history
 - Use "a" only for recent meaningful actions; do not log every file read or trivial step
 - Keep all arrays compact, deduplicated, and ordered from oldest to newest
-- Context schema: {"v":int,"u":"str","p":"str","root":"str","t":"str","s":{},"n":"str","b":[],"d":[],"c":[],"f":[],"h":[],"a":[],"e":"str|null","i":"str","m":{},"createdAt":"str","lastUsed":"str|null"}
+- Context schema: {"v":3,"p":"str","root":"str","t":"str","i":"str","n":"str","s":{},"b":[],"d":[],"c":[],"f":[],"h":[],"a":[],"e":"str|null"}
 
 CTX_UPDATE:{"v":3,...}`;
 }

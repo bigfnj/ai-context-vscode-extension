@@ -146,17 +146,16 @@ function testCompactInjectionProjection() {
     assert.ok(firstLine.startsWith(`${inject.AGENT_CONTEXT_NAME}=`));
 
     const projected = JSON.parse(firstLine.slice(`${inject.AGENT_CONTEXT_NAME}=`.length));
-    assert.deepStrictEqual(projected.mem, {
-        b: ['blocker'],
-        d: ['decision'],
-        c: ['constraint'],
-        f: ['src/inject.js'],
-    });
+    assert.deepStrictEqual(projected.b, ['blocker']);
+    assert.deepStrictEqual(projected.d, ['decision']);
+    assert.deepStrictEqual(projected.c, ['constraint']);
+    assert.deepStrictEqual(projected.f, ['src/inject.js']);
     assert.deepStrictEqual(projected.h, ['older summary']);
     assert.deepStrictEqual(projected.a, ['recent action']);
+    assert.strictEqual(projected.mem,       undefined);
     assert.strictEqual(projected.createdAt, undefined);
-    assert.strictEqual(projected.lastUsed, undefined);
-    assert.strictEqual(projected.m, undefined);
+    assert.strictEqual(projected.lastUsed,  undefined);
+    assert.strictEqual(projected.m,         undefined);
     assert.ok(!block.includes('Raw context'));
     assert.ok(!block.includes('Project     :'));
 }
@@ -403,5 +402,50 @@ testCodexKiloTargetsDeduplicate();
 testAutoInjectWritesNestedCodexTargets();
 testGitignoreUsesNestedGitRoot();
 testContextUpdateParsing();
+
+// Verifies that normalizeContext accepts the old mem:{b,d,c,f} format produced
+// by the previous injection schema and promotes it to top-level fields.
+function testMemFormatFallback() {
+    const dir = tmpDir();
+    const ctxWithMem = {
+        v: 3, p: 'Demo', root: dir, t: 'task',
+        mem: { b: ['blocker-mem'], d: ['decision-mem'], c: ['constraint-mem'], f: ['file-mem.js'] },
+        h: [], a: [], s: {}, n: '', i: '', e: null,
+    };
+    context.saveContext(dir, 'Demo', ctxWithMem);
+    const loaded = context.loadContext(dir, 'Demo');
+    assert.deepStrictEqual(loaded.b, ['blocker-mem'],    'b should be promoted from mem');
+    assert.deepStrictEqual(loaded.d, ['decision-mem'],   'd should be promoted from mem');
+    assert.deepStrictEqual(loaded.c, ['constraint-mem'], 'c should be promoted from mem');
+    assert.deepStrictEqual(loaded.f, ['file-mem.js'],    'f should be promoted from mem');
+}
+
+// Verifies the sidecar round-trip: extractContextUpdate parses the file, the
+// merged result survives normalizeContext, and top-level fields win over mem.
+function testSidecarRoundTrip() {
+    const dir  = tmpDir();
+    const base = context.createDefaultContext('Demo', dir);
+    base.b = ['existing-blocker'];
+    context.saveContext(dir, 'Demo', base);
+
+    // Simulate Claude writing CTX_UPDATE with top-level fields (new format)
+    const sidecarContent = 'CTX_UPDATE:{"v":3,"p":"Demo","n":"next action","b":["new-blocker"],"d":["new-decision"],"a":["did thing"],"s":{"phase":"work"},"c":[],"f":[],"h":[],"e":null}';
+    const update = claude.extractContextUpdate(sidecarContent);
+    assert.ok(update, 'extractContextUpdate should parse sidecar content');
+    assert.strictEqual(update.n, 'next action');
+
+    const current = context.loadContext(dir, 'Demo');
+    context.saveContext(dir, 'Demo', { ...current, ...update });
+    const saved = context.loadContext(dir, 'Demo');
+
+    assert.strictEqual(saved.n, 'next action');
+    assert.deepStrictEqual(saved.b, ['new-blocker'],   'b from CTX_UPDATE should win');
+    assert.deepStrictEqual(saved.d, ['new-decision'],  'd from CTX_UPDATE should win');
+    assert.deepStrictEqual(saved.a, ['did thing'],     'a from CTX_UPDATE should be saved');
+    assert.strictEqual(saved.p, 'Demo');
+}
+
+testMemFormatFallback();
+testSidecarRoundTrip();
 
 console.log('unit tests passed');

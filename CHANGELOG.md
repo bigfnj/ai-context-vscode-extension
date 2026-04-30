@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.9.0] - 2026-04-30
+
+### Fixed
+
+- **Schema consistency (critical):** `buildAgentContext` now uses flat top-level
+  `b/d/c/f` fields instead of a nested `mem:{}` object. Both the injection block
+  and `buildPrompt` now present the same schema to Claude, eliminating silent
+  data loss when Claude emitted CTX_UPDATE using the `mem` format it saw in
+  AGENTS.md/CLAUDE.md.
+- **Backward compatibility:** `normalizeContext` now accepts the old `mem:{b,d,c,f}`
+  format as a fallback, so existing contexts or sidecars written with the previous
+  schema are promoted correctly rather than silently dropped.
+- `buildPrompt` (Run Task path) now uses `buildAgentContext` for the context
+  payload — Run Task and interactive sessions now give Claude an identical schema.
+
+### Added
+
+- **Git bootstrap for fresh contexts:** when a context is first activated
+  (`t === 'init'`), the extension runs `git log --oneline -8` and
+  `git status --short` in the project root and pre-populates `a`, `n`, and `s`
+  fields. New projects no longer start with a blank slate.
+- **Status bar item:** a persistent `$(database) [context-name]` indicator in
+  the VS Code status bar shows the active context at a glance. Clicking it opens
+  the context switcher. Updates automatically on every context switch.
+- Two new unit tests: `testMemFormatFallback` (old mem format round-trip) and
+  `testSidecarRoundTrip` (CTX_UPDATE merge and field survival).
+
+---
+
 ## [2.8.4] - 2026-04-30
 
 ### Added

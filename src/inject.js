@@ -135,15 +135,13 @@ function buildAgentContext(ctx) {
         i:    ctx.i || '',
         n:    ctx.n || '',
         s:    asObject(ctx.s),
-        mem:  {
-            b: asArray(ctx.b),
-            d: asArray(ctx.d),
-            c: asArray(ctx.c),
-            f: asArray(ctx.f),
-        },
-        h: asArray(ctx.h),
-        a: asArray(ctx.a),
-        e: ctx.e === undefined ? null : ctx.e,
+        b:    asArray(ctx.b),
+        d:    asArray(ctx.d),
+        c:    asArray(ctx.c),
+        f:    asArray(ctx.f),
+        h:    asArray(ctx.h),
+        a:    asArray(ctx.a),
+        e:    ctx.e === undefined ? null : ctx.e,
     };
 }
 
@@ -151,10 +149,10 @@ function buildInjectionBlock(ctx, storePath) {
     const projected = buildAgentContext(ctx);
     const lines = [
         `${AGENT_CONTEXT_NAME}=${JSON.stringify(projected)}`,
-        `Use ${AGENT_CONTEXT_NAME} as authoritative session state. Continue from n; preserve mem/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.`,
+        `Use ${AGENT_CONTEXT_NAME} as authoritative session state. Continue from n; preserve b/d/c/f/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.`,
     ];
     if (storePath) {
-        lines.push(`After each response, write \`CTX_UPDATE:{...updated ${AGENT_CONTEXT_NAME} fields}\` as a single line to ${storePath}.update — the VS Code extension reads, merges, and deletes it automatically to persist state after every turn.`);
+        lines.push(`After each response, write a single line \`CTX_UPDATE:{"v":3,"p":"...","root":"...","t":"...","i":"...","n":"...","s":{},"b":[],"d":[],"c":[],"f":[],"h":[],"a":[],"e":null}\` to ${storePath}.update — the VS Code extension reads, merges, and deletes it to persist state after every turn.`);
     }
     return lines.join('\n');
 }
