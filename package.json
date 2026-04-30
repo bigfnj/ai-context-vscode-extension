@@ -4,6 +4,10 @@
   "description": "Stateful AI session manager — auto-injects context into Claude and Copilot on workspace open",
   "version": "2.3.0",
   "publisher": "local",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bigfnj/ai-context-vscode-extension.git"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
