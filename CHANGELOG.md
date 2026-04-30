@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Per-project permission capture & reinjection:** The extension now captures
+  permissions granted to Claude Code during `AI: Run Task` sessions, generalizes
+  them conservatively (e.g., `Bash(python3 -c 'long script')` → `Bash(python3 -c *)`),
+  and stores them in the context. On every context load, permissions are reinjected
+  into `~/.claude/settings.json` and `~/.codex/config.toml`, eliminating
+  re-prompting for already-approved commands.
+
+- **Auto-consolidation:** At VS Code startup, the extension scans all projects.
+  Permissions appearing in 2+ projects are automatically promoted to global config
+  and removed from individual projects, building a global allowlist naturally over time.
+
+- **AI: Manage Permissions command:** New command to view, remove, or adjust
+  per-project Claude/Codex permissions. Integrated into `AI: Config` menu.
+
+- **New field `perms` in context schema:** Stores `claude` (command allowlist) and
+  `codex` (trust level) per-project. Never injected into agent files — only used
+  for config management.
+
+### Changed
+
+- Version count: 9 commands (added `AI: Manage Permissions`).
+
+---
+
 ## [2.9.2] - 2026-04-30
 
 ### Changed

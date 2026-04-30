@@ -27,6 +27,12 @@ Task runs → Claude responds with CTX_UPDATE:
   → file watcher fires
   → all agent files updated automatically
   → next session picks up the new state
+
+New permissions approved during task:
+  → captured & generalized (Bash(python3 -c 'x') → Bash(python3 -c *))
+  → stored per-project in context
+  → automatically reinjected on next session
+  → consolidated to global config when appearing in 2+ projects
 ```
 
 Context JSON files live in `~/.ai-context/` — your home directory. The injected
@@ -73,7 +79,7 @@ Ctrl+Shift+P → Developer: Reload Window
 Verify installation:
 
 ```
-Ctrl+Shift+P → type "AI:" — all 8 commands should appear
+Ctrl+Shift+P → type "AI:" — all 9 commands should appear
 ```
 
 ## Configuration
@@ -135,9 +141,11 @@ for the current window.
 | `AI: Set Active Context` | `Ctrl+Alt+S` | Manually set which context is active for this window |
 | `AI: New Context` | — | Create a new context and bind it to a project folder |
 | `AI: View Context` | — | Open a context file as formatted JSON |
+| `AI: Manage Permissions` | — | View, remove, or adjust per-project permissions and Codex trust level |
 | `AI: Delete Context` | — | Permanently delete a context |
 | `AI: Clean Up Contexts` | — | Bulk archive or delete — orphan detection, age display |
 | `AI: Restore Archived Context` | — | Restore a previously archived context |
+| `AI: Reinject Active Context` | `Ctrl+Alt+R` | Re-inject current context into all agent files |
 | `AI: Config` | `Ctrl+Alt+C` | Interactive configuration menu |
 
 ## Auto-detection behavior
@@ -203,6 +211,36 @@ a project. Injection writes derived files into each project folder.
     OldProject_1714000000000.json   ← archived, not deleted
 ```
 
+## Permission capture & reinjection
+
+The extension automatically captures and manages permissions for Claude Code and Codex
+so you're not re-prompted for already-approved commands in new sessions.
+
+**How it works:**
+
+1. **Capture** — When you run a task, the extension snapshots Claude's permission
+   allowlist before and after, then diffs it to detect newly approved commands.
+
+2. **Generalize** — Captured permissions are conservatively generalized:
+   - `Bash(python3 -c 'long script here')` → `Bash(python3 -c *)`
+   - `/home/user/projects/ProjectA/file.md` → `/home/user/projects/**`
+   - Deduplication prevents redundant rules.
+
+3. **Store per-project** — Generalized permissions are stored in the context file
+   under `perms.claude[]` and `perms.codex` (trust level).
+
+4. **Reinject on load** — Every context load merges stored permissions into
+   `~/.claude/settings.json` and updates `~/.codex/config.toml`.
+
+5. **Auto-consolidate** — At VS Code startup, the extension scans all projects.
+   Permissions appearing in 2+ projects are automatically promoted to your global
+   allowlist and removed from individual projects.
+
+**Manage permissions:**
+
+Use **AI: Manage Permissions** to view, remove individual rules, or adjust the
+Codex trust level for the active context. Also accessible from **AI: Config** menu.
+
 ## Context file format
 
 ```json
@@ -225,6 +263,10 @@ a project. Injection writes derived files into each project folder.
   "m": {
     "compactedAt": null,
     "compactionVersion": 1
+  },
+  "perms": {
+    "claude": ["Bash(python3 -c *)", "Bash(git *)", "WebSearch"],
+    "codex": "trusted"
   },
   "createdAt": "2026-04-28T12:00:00.000Z",
   "lastUsed": "2026-04-28T14:30:00.000Z"
@@ -249,6 +291,7 @@ a project. Injection writes derived files into each project folder.
 | `e` | Last error, or null |
 | `i` | Intent / goal |
 | `m` | Optional metadata |
+| `perms` | Captured & generalized permissions — `claude` (allowlist), `codex` (trust level) |
 | `createdAt` | Set once on creation, never modified |
 | `lastUsed` | Updated automatically on every save |
 
