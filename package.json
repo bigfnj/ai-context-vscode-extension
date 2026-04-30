@@ -1,8 +1,8 @@
 {
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
-  "description": "Stateful AI session manager — auto-injects context into Claude and Copilot on workspace open",
-  "version": "2.3.0",
+  "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
+  "version": "2.4.0",
   "publisher": "local",
   "repository": {
     "type": "git",
@@ -57,6 +57,25 @@
         "key": "ctrl+alt+s",
         "mac": "cmd+alt+s"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "AI Context Runner",
+      "properties": {
+        "aiContext.projectsRoot": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Root folder containing your projects. Used for the project picker when creating contexts.\n\nExample (WSL): `/home/Vibe-Projects`\n\nLeave blank to use `~/projects`."
+        },
+        "aiContext.agents": {
+          "type": "array",
+          "default": ["claude", "codex", "copilot"],
+          "items": {
+            "type": "string",
+            "enum": ["claude", "codex", "copilot", "cursor", "windsurf", "kilo"]
+          },
+          "markdownDescription": "AI agents to inject context for on workspace open.\n\n| Value | File written |\n|---|---|\n| `claude` | `CLAUDE.md` |\n| `codex` | `AGENTS.md` |\n| `copilot` | `.github/copilot-instructions.md` |\n| `cursor` | `.cursorrules` |\n| `windsurf` | `.windsurfrules` |\n| `kilo` | `KILO.md` |"
+        }
+      }
+    }
   }
 }

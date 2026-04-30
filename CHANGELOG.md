@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.4.0] — 2026-04-29
+
+### Added
+
+- **Multi-agent injection** — context is now written to all configured AI agent files
+  simultaneously. Supported agents: `claude` (CLAUDE.md), `codex` (AGENTS.md),
+  `copilot` (.github/copilot-instructions.md), `cursor` (.cursorrules),
+  `windsurf` (.windsurfrules), `kilo` (KILO.md). Default: `claude`, `codex`, `copilot`.
+- **`aiContext.agents` setting** — VS Code setting to choose which agents receive
+  injection. Configurable per workspace or globally.
+- **`aiContext.projectsRoot` setting** — point the project picker at any folder
+  (e.g. `/home/Vibe-Projects` for WSL setups where projects live outside `~/projects`).
+- **`normalizePath()`** in `context.js` — resolves `~`, strips trailing slashes,
+  trims whitespace for consistent path matching in WSL.
+- **Silent auto-detection** — auto-load on startup only shows a notification when
+  the active context actually changes; reload/re-inject is silent.
+
+### Changed
+
+- `listProjectDirs()` now reads from `aiContext.projectsRoot` config instead of
+  always using `~/projects`.
+- `createContextWithRoot()` default path input pre-filled with configured
+  `projectsRoot` instead of `~/projects`.
+- `AI: Set Active Context` and `AI: New Context` now show which agents will be
+  injected in the notification message.
+- `detectContextForPath()` extracted as a standalone function — used for both
+  startup detection and workspace-folder-change detection.
+
+---
+
 ## [2.3.0] — 2026-04-28
 
 ### Added

@@ -13,7 +13,31 @@ function getArchiveDir() {
 
 function getWorkspaceRoot() {
     const folders = vscode.workspace.workspaceFolders;
-    return folders && folders.length > 0 ? folders[0].uri.fsPath : os.homedir();
+    return folders && folders.length > 0
+        ? normalizePath(folders[0].uri.fsPath)
+        : os.homedir();
+}
+
+// Normalizes a path for WSL:
+//   - Resolves leading ~ to home dir
+//   - Strips trailing slashes for consistent prefix matching
+//   - Handles whitespace
+function normalizePath(p) {
+    if (!p || typeof p !== 'string') return p;
+    p = p.trim();
+    if (p.startsWith('~')) p = os.homedir() + p.slice(1);
+    return p.replace(/\/+$/, '');  // strip trailing slashes
+}
+
+// Returns the configured projects root directory.
+// Reads aiContext.projectsRoot from VS Code settings; falls back to ~/projects.
+function getProjectsRoot() {
+    const config = vscode.workspace.getConfiguration('aiContext');
+    const configured = config.get('projectsRoot');
+    if (configured && configured.trim()) {
+        return normalizePath(configured.trim());
+    }
+    return path.join(os.homedir(), 'projects');
 }
 
 function ensureDir(dir) {
@@ -114,9 +138,10 @@ function restoreArchivedContext(archiveName) {
     return destName;
 }
 
-// Returns subdirectory names from ~/projects/ for the new-context project picker.
+// Returns subdirectory entries from the configured projectsRoot for the
+// new-context project picker. Reads aiContext.projectsRoot from settings.
 function listProjectDirs() {
-    const projectsDir = path.join(os.homedir(), 'projects');
+    const projectsDir = getProjectsRoot();
     if (!fs.existsSync(projectsDir)) return [];
     try {
         return fs.readdirSync(projectsDir)
@@ -149,6 +174,8 @@ module.exports = {
     getCtxDir,
     getArchiveDir,
     getWorkspaceRoot,
+    getProjectsRoot,
+    normalizePath,
     ensureDir,
     listContexts,
     listArchivedContexts,

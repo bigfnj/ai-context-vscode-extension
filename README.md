@@ -1,38 +1,39 @@
 # AI Context Runner
 
-A VS Code extension that gives Claude Code and GitHub Copilot persistent memory across
-sessions — automatically, with no manual steps after first-time setup per project.
+A VS Code extension that gives **any AI agent** (Claude Code, Codex, GitHub Copilot,
+Cursor, Windsurf, Kilo) persistent memory across sessions — automatically, with no
+manual steps after first-time setup per project.
 
 ## How it works
 
-On every VS Code launch, the extension reads the active context for that window and
-writes it into two files that AI tools read automatically:
-
-- `CLAUDE.md` — read by Claude Code at the start of every session
-- `.github/copilot-instructions.md` — read by GitHub Copilot Chat automatically
-
-A file watcher keeps both files current after every task run, so the AI always has
-the latest state without any manual action.
+On every VS Code launch, the extension **auto-detects** which project you've opened
+by matching the workspace folder path against stored context roots. It then injects
+the matching context into every configured AI agent file simultaneously.
 
 ```
-VS Code launches
-  → reads active context for this window (workspaceState)
-  → injects into {project}/CLAUDE.md + {project}/.github/copilot-instructions.md
-  → open Claude or Copilot — context already there
+VS Code opens a project folder
+  → extension matches path against ~/.ai-context/*.json roots
+  → finds best match (longest prefix wins)
+  → injects into CLAUDE.md + AGENTS.md + .github/copilot-instructions.md
+  → open Claude Code, Codex, Copilot — context already there
 
 Task runs → Claude responds with CTX_UPDATE:
-  → context file saved to ~/.ai-context/
+  → context JSON saved to ~/.ai-context/
   → file watcher fires
-  → CLAUDE.md + copilot-instructions.md updated automatically
+  → all agent files updated automatically
   → next session picks up the new state
 ```
 
-Multiple windows work independently. Each window tracks its own active context —
-changing the active context in one window does not affect any other window.
+Context JSON files live in `~/.ai-context/` — your home directory. The injected
+files (`CLAUDE.md`, `AGENTS.md`, etc.) are materialized into each project folder
+on demand and are always derived from the home-directory store.
+
+Multiple windows work independently. Each window auto-detects its own context on
+open. Changing the active context in one window does not affect any other window.
 
 ## Requirements
 
-- [Claude Code CLI](https://claude.ai/code) installed and available as `claude` on your PATH
+- [Claude Code CLI](https://claude.ai/code) installed as `claude` on your PATH (WSL: inside WSL, not Windows)
 - VS Code 1.80+
 
 ## Installation (WSL)
@@ -42,8 +43,8 @@ take effect on reload without repackaging:
 
 ```bash
 mkdir -p ~/.vscode-server/extensions
-ln -s /path/to/ai-context-extension \
-      ~/.vscode-server/extensions/local.ai-context-runner-2.3.0
+ln -s /home/Vibe-Projects/AIContext/ai-context-extension \
+      ~/.vscode-server/extensions/local.ai-context-runner-2.4.0
 ```
 
 Then reload VS Code:
@@ -58,37 +59,82 @@ Verify installation:
 Ctrl+Shift+P → type "AI:" — all 7 commands should appear
 ```
 
-## First-time setup (one step, per window)
+## Configuration
+
+Open VS Code Settings (`Ctrl+,`) and search for **AI Context**:
+
+| Setting | Default | Description |
+|---|---|---|
+| `aiContext.projectsRoot` | _(empty)_ | Root folder for the project picker. Set to e.g. `/home/Vibe-Projects` for WSL. Falls back to `~/projects` if blank. |
+| `aiContext.agents` | `["claude","codex","copilot"]` | Which AI agents receive context injection on workspace open. |
+
+### Supported agents
+
+| Value | File written to project root |
+|---|---|
+| `claude` | `CLAUDE.md` |
+| `codex` | `AGENTS.md` |
+| `copilot` | `.github/copilot-instructions.md` |
+| `cursor` | `.cursorrules` |
+| `windsurf` | `.windsurfrules` |
+| `kilo` | `KILO.md` |
+
+### WSL example (`settings.json`)
+
+```json
+{
+  "aiContext.projectsRoot": "/home/Vibe-Projects",
+  "aiContext.agents": ["claude", "codex", "copilot"]
+}
+```
+
+## First-time setup (one step, per project)
 
 ```
-Ctrl+Alt+S → AI: Set Active Context → pick or create a context
+Ctrl+P → AI: New Context → enter name → pick project folder
 ```
 
-That's it. Every launch from that point is fully automatic for that window.
+After that, every time you open that project folder VS Code auto-detects and
+loads the correct context with no further action needed.
+
+You can also use `Ctrl+Alt+S` to manually set or override the active context
+for the current window.
 
 ## Commands
 
 | Command | Shortcut | Description |
 |---|---|---|
-| `AI: Run Task` | `Ctrl+Alt+A` | Run a task using the selected context via Claude CLI |
-| `AI: Set Active Context` | `Ctrl+Alt+S` | Set which context auto-injects on launch for this window |
+| `AI: Run Task` | `Ctrl+Alt+A` | Run a task using the active context via Claude CLI |
+| `AI: Set Active Context` | `Ctrl+Alt+S` | Manually set which context is active for this window |
 | `AI: New Context` | — | Create a new context and bind it to a project folder |
 | `AI: View Context` | — | Open a context file as formatted JSON |
 | `AI: Delete Context` | — | Permanently delete a context |
 | `AI: Clean Up Contexts` | — | Bulk archive or delete — orphan detection, age display |
 | `AI: Restore Archived Context` | — | Restore a previously archived context |
 
+## Auto-detection behavior
+
+When you open a project folder, the extension:
+
+1. Scans all contexts in `~/.ai-context/*.json`
+2. Finds the context whose `root` is the **longest path prefix** of your workspace folder
+3. Sets it active and injects into all configured agent files silently
+4. Only shows a notification if it switches away from a previously active context
+
+**Example**: With contexts for `/home/Vibe-Projects/ProjectA` and
+`/home/Vibe-Projects/ProjectB`, opening either folder loads the correct context
+automatically.
+
 ## Context storage
 
-All context files live in `~/.ai-context/` — a single global store shared across all
-windows and workspaces. Each context has a `root` field that binds it to its project
-folder. Injection always targets `{root}/CLAUDE.md` and `{root}/.github/copilot-instructions.md`.
+All context files live in `~/.ai-context/` — a global store in your home directory,
+independent of any project folder. Each context has a `root` field that binds it to
+a project. Injection writes derived files into each project folder.
 
 ```
 ~/.ai-context/
-  BriefingAgent.json
-  AIContext.json
-  OldProject.json
+  ProjectA.json
+  ProjectB.json
   archive/
     OldProject_1714000000000.json   ← archived, not deleted
 ```
@@ -100,7 +146,7 @@ folder. Injection always targets `{root}/CLAUDE.md` and `{root}/.github/copilot-
   "v": 1,
   "u": "username",
   "p": "project-name",
-  "root": "/home/user/projects/@Project-Name",
+  "root": "/home/Vibe-Projects/ProjectA",
   "t": "current-task",
   "s": {},
   "a": [],
@@ -116,37 +162,24 @@ folder. Injection always targets `{root}/CLAUDE.md` and `{root}/.github/copilot-
 | `v` | Schema version |
 | `u` | User / actor |
 | `p` | Project name (display label) |
-| `root` | Absolute path to the project folder — controls where CLAUDE.md is written |
+| `root` | Absolute path to the project folder |
 | `t` | Current task |
 | `s` | State — active working object, params, conditions |
 | `a` | Recent actions (string array) |
 | `e` | Last error, or null |
 | `i` | Intent / goal |
-| `m` | Metadata (optional, freeform object) |
-| `createdAt` | ISO timestamp — set once on creation, never modified |
-| `lastUsed` | ISO timestamp — updated automatically on every save |
-
-## Cleaning up
-
-`AI: Clean Up Contexts` scans all contexts and detects orphans — contexts whose `root`
-path no longer exists on disk. Orphans are pre-selected. For each context you can see:
-
-- Whether the project folder still exists
-- How long ago it was last used
-- When it was created
-
-Choose **Archive** to move to `~/.ai-context/archive/` (recoverable via
-`AI: Restore Archived Context`) or **Delete permanently**.
+| `createdAt` | Set once on creation, never modified |
+| `lastUsed` | Updated automatically on every save |
 
 ## What to gitignore in your projects
 
-Add to each project's `.gitignore` to avoid committing auto-injected AI files:
-
-```
+```gitignore
 CLAUDE.md
+AGENTS.md
+KILO.md
+.cursorrules
+.windsurfrules
 .github/copilot-instructions.md
 ```
 
-Whether to commit `CLAUDE.md` depends on whether you want the context shared with
-teammates. The `~/.ai-context/` store itself is user-specific and should not be
-committed to any project.
+The `~/.ai-context/` store is user-specific and should not be committed to any project.

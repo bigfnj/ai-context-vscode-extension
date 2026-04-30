@@ -14,10 +14,13 @@ const {
     archiveContext,
     restoreArchivedContext,
     listProjectDirs,
+    getProjectsRoot,
+    normalizePath,
+    getWorkspaceRoot,
     formatRelativeTime,
 } = require('./context');
 
-const { autoInject, clearInjectionForContext } = require('./inject');
+const { autoInject, clearInjectionForContext, getAgents } = require('./inject');
 const { buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude } = require('./claude');
 
 const ACTIVE_KEY = 'ai.activeContext';
@@ -30,6 +33,27 @@ async function setActive(wsState, name) {
     return wsState.update(ACTIVE_KEY, name);
 }
 
+// Finds the best-matching context for a given workspace root path.
+// Best match = longest ctx.root that is a prefix of workspaceRoot.
+// Returns context name or null.
+function detectContextForPath(dir, workspaceRoot) {
+    const normalized = normalizePath(workspaceRoot);
+    let matchedName  = null;
+    let longestRoot  = 0;
+
+    for (const name of listContexts(dir)) {
+        const ctx  = loadContext(dir, name);
+        const root = normalizePath(ctx.root);
+        if (root && fs.existsSync(root) &&
+            normalized.startsWith(root) &&
+            root.length > longestRoot) {
+            matchedName = name;
+            longestRoot = root.length;
+        }
+    }
+    return matchedName;
+}
+
 async function pickOrCreateContext(dir, wsState) {
     const existing   = listContexts(dir);
     const active     = getActive(wsState);
@@ -38,7 +62,7 @@ async function pickOrCreateContext(dir, wsState) {
     if (existing.length === 0) {
         const name = await vscode.window.showInputBox({
             prompt: 'No contexts found. Enter a name for your first context',
-            placeHolder: 'e.g. BriefingAgent, AIContext',
+            placeHolder: 'e.g. MyProject, BriefingAgent',
             validateInput: v => (v && v.trim() ? null : 'Name cannot be empty'),
         });
         if (!name) return null;
@@ -59,7 +83,7 @@ async function pickOrCreateContext(dir, wsState) {
     if (pick.label === NEW_OPTION) {
         const name = await vscode.window.showInputBox({
             prompt: 'New context name',
-            placeHolder: 'e.g. BriefingAgent, AIContext',
+            placeHolder: 'e.g. MyProject, BriefingAgent',
             validateInput: v => {
                 if (!v || !v.trim()) return 'Name cannot be empty';
                 if (existing.includes(v.trim())) return 'Context already exists';
@@ -92,14 +116,14 @@ async function createContextWithRoot(dir, name) {
         projectRoot = pick.label === MANUAL_OPTION
             ? await vscode.window.showInputBox({
                 prompt: 'Absolute path to project root',
-                value: path.join(os.homedir(), 'projects') + '/',
+                value: getProjectsRoot() + path.sep,
                 validateInput: v => (v && v.trim() ? null : 'Path cannot be empty'),
             })
             : pick.description;
     } else {
         projectRoot = await vscode.window.showInputBox({
             prompt: 'Absolute path to project root',
-            value: path.join(os.homedir(), 'projects') + '/',
+            value: getProjectsRoot() + path.sep,
             validateInput: v => (v && v.trim() ? null : 'Path cannot be empty'),
         });
     }
@@ -110,7 +134,7 @@ async function createContextWithRoot(dir, name) {
         v: 1,
         u: os.userInfo().username,
         p: name,
-        root: projectRoot.trim(),
+        root: normalizePath(projectRoot),
         t: 'init',
         s: {},
         a: [],
@@ -125,32 +149,29 @@ function activate(context) {
     const dir     = getCtxDir();
     const wsState = context.workspaceState;
 
-    // ── Auto-detect and set context on startup ─────────────────────────────────
-    const workspaceRoot = getWorkspaceRoot();
-    const contexts      = listContexts(dir);
+    // ── Auto-detect context on startup ────────────────────────────────────────
+    // Silently matches the workspace path against known context roots.
+    // Only notifies if it switches away from a previously active context.
+    (function autoDetectOnStartup() {
+        const workspaceRoot = getWorkspaceRoot();
+        const matched       = detectContextForPath(dir, workspaceRoot);
+        const previous      = getActive(wsState);
 
-    // Find best-match: longest root that is a prefix of workspaceRoot
-    let matchedName = null;
-    let longestRoot = 0;
-    for (const name of contexts) {
-        const ctx = loadContext(dir, name);
-        if (ctx.root && fs.existsSync(ctx.root) &&
-            workspaceRoot.startsWith(ctx.root) &&
-            ctx.root.length > longestRoot) {
-            matchedName = name;
-            longestRoot = ctx.root.length;
+        if (matched) {
+            setActive(wsState, matched);
+            autoInject(loadContext(dir, matched));
+            if (matched !== previous) {
+                vscode.window.showInformationMessage(
+                    `AI Context: auto-loaded [${matched}]`
+                );
+            }
+        } else if (previous) {
+            // No path match — keep previous and re-inject (handles reload without folder change)
+            autoInject(loadContext(dir, previous));
         }
-    }
+    })();
 
-    if (matchedName) {
-        setActive(wsState, matchedName);
-        autoInject(loadContext(dir, matchedName));
-    } else if (getActive(wsState)) {
-        // Fallback: inject whatever was previously active (legacy behavior)
-        autoInject(loadContext(dir, getActive(wsState)));
-    }
-
-    // ── File watcher ──────────────────────────────────────────────────────────
+    // ── File watcher — re-inject when context JSON changes ───────────────────
     const watcher = vscode.workspace.createFileSystemWatcher(
         new vscode.RelativePattern(vscode.Uri.file(dir), '*.json')
     );
@@ -165,30 +186,21 @@ function activate(context) {
     watcher.onDidChange(onContextChange);
     watcher.onDidCreate(onContextChange);
 
-    // ── Auto-switch context when workspace folder changes ─────────────────────
-    function autoSwitchFromWorkspace() {
-        const root = getWorkspaceRoot();
-        let matched = null;
-        let longest = 0;
-
-        for (const name of listContexts(dir)) {
-            const ctx = loadContext(dir, name);
-            if (ctx.root && fs.existsSync(ctx.root) &&
-                root.startsWith(ctx.root) && ctx.root.length > longest) {
-                matched = name;
-                longest = ctx.root.length;
-            }
-        }
-
-        if (matched && matched !== getActive(wsState)) {
-            setActive(wsState, matched);
-            autoInject(loadContext(dir, matched));
-        }
-    }
-
-    // Check on startup (already done above) and whenever workspace folders change
+    // ── Re-detect when workspace folders change ───────────────────────────────
     context.subscriptions.push(
-        vscode.workspace.onDidChangeWorkspaceFolders(autoSwitchFromWorkspace)
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            const root    = getWorkspaceRoot();
+            const matched = detectContextForPath(dir, root);
+            const current = getActive(wsState);
+
+            if (matched && matched !== current) {
+                setActive(wsState, matched);
+                autoInject(loadContext(dir, matched));
+                vscode.window.showInformationMessage(
+                    `AI Context: switched to [${matched}]`
+                );
+            }
+        })
     );
 
     // ── AI: Set Active Context ────────────────────────────────────────────────
@@ -202,23 +214,24 @@ function activate(context) {
         }
 
         const current = getActive(wsState);
+        const agents  = getAgents().join(', ');
         const pick = await vscode.window.showQuickPick(
             contexts.map(name => {
                 const ctx = loadContext(dir, name);
                 return {
-                    label: name,
+                    label:       name,
                     description: (ctx.root || 'no root set') + (name === current ? '  ● active' : ''),
-                    detail: `last used: ${formatRelativeTime(ctx.lastUsed)}  ·  created: ${formatRelativeTime(ctx.createdAt)}`,
+                    detail:      `last used: ${formatRelativeTime(ctx.lastUsed)}  ·  created: ${formatRelativeTime(ctx.createdAt)}`,
                 };
             }),
-            { placeHolder: 'Set active context for THIS window' }
+            { placeHolder: `Set active context for THIS window  [agents: ${agents}]` }
         );
         if (!pick) return;
 
         await setActive(wsState, pick.label);
         autoInject(loadContext(dir, pick.label));
         vscode.window.showInformationMessage(
-            `[${pick.label}] active in this window — injected into its project folder`
+            `[${pick.label}] active — injected for: ${agents}`
         );
     });
 
@@ -280,9 +293,9 @@ function activate(context) {
             contexts.map(name => {
                 const ctx = loadContext(dir, name);
                 return {
-                    label: name,
+                    label:       name,
                     description: (ctx.root || 'no root') + (name === active ? '  ● active' : ''),
-                    detail: `last used: ${formatRelativeTime(ctx.lastUsed)}  ·  created: ${formatRelativeTime(ctx.createdAt)}`,
+                    detail:      `last used: ${formatRelativeTime(ctx.lastUsed)}  ·  created: ${formatRelativeTime(ctx.createdAt)}`,
                 };
             }),
             { placeHolder: 'Select context to view' }
@@ -301,7 +314,7 @@ function activate(context) {
         const existing = listContexts(dir);
         const name = await vscode.window.showInputBox({
             prompt: 'New context name',
-            placeHolder: 'e.g. BriefingAgent, AIContext',
+            placeHolder: 'e.g. MyProject, BriefingAgent',
             validateInput: v => {
                 if (!v || !v.trim()) return 'Name cannot be empty';
                 if (existing.includes(v.trim())) return 'Context already exists';
@@ -320,7 +333,9 @@ function activate(context) {
         if (makeActive === 'Yes') {
             await setActive(wsState, name.trim());
             autoInject(loadContext(dir, name.trim()));
-            vscode.window.showInformationMessage(`[${name.trim()}] active — injected into its project folder`);
+            vscode.window.showInformationMessage(
+                `[${name.trim()}] active — injected for: ${getAgents().join(', ')}`
+            );
         }
     });
 
@@ -337,9 +352,9 @@ function activate(context) {
             contexts.map(name => {
                 const ctx = loadContext(dir, name);
                 return {
-                    label: name,
+                    label:       name,
                     description: (ctx.root || 'no root') + (name === active ? '  ● active' : ''),
-                    detail: `last used: ${formatRelativeTime(ctx.lastUsed)}`,
+                    detail:      `last used: ${formatRelativeTime(ctx.lastUsed)}`,
                 };
             }),
             { placeHolder: 'Select context to delete' }
@@ -366,8 +381,6 @@ function activate(context) {
     });
 
     // ── AI: Clean Up Contexts ─────────────────────────────────────────────────
-    // Shows all contexts with orphan detection (root path missing) and last-used
-    // timestamps. Orphaned contexts are pre-selected. User can bulk archive or delete.
     const cleanUp = vscode.commands.registerCommand('ai.cleanUpContexts', async () => {
         const contexts = listContexts(dir);
         if (contexts.length === 0) {
@@ -377,11 +390,11 @@ function activate(context) {
 
         const active = getActive(wsState);
         const items = contexts.map(name => {
-            const ctx       = loadContext(dir, name);
-            const rootOk    = !!(ctx.root && fs.existsSync(ctx.root));
-            const lastUsed  = formatRelativeTime(ctx.lastUsed);
-            const created   = formatRelativeTime(ctx.createdAt);
-            const isActive  = name === active;
+            const ctx      = loadContext(dir, name);
+            const rootOk   = !!(ctx.root && fs.existsSync(normalizePath(ctx.root)));
+            const lastUsed = formatRelativeTime(ctx.lastUsed);
+            const created  = formatRelativeTime(ctx.createdAt);
+            const isActive = name === active;
 
             return {
                 label:       rootOk ? name : `⚠  ${name}`,
@@ -392,9 +405,9 @@ function activate(context) {
                     `created: ${created}`,
                     isActive ? '● active in this window' : null,
                 ].filter(Boolean).join('  ·  '),
-                picked:      !rootOk,
-                _name:       name,
-                _isOrphan:   !rootOk,
+                picked:    !rootOk,
+                _name:     name,
+                _isOrphan: !rootOk,
             };
         });
 
@@ -407,14 +420,14 @@ function activate(context) {
 
         const action = await vscode.window.showQuickPick([
             {
-                label: '$(archive) Archive',
+                label:       '$(archive) Archive',
                 description: 'Move to ~/.ai-context/archive/  —  recoverable with "AI: Restore Archived Context"',
-                value: 'archive',
+                value:       'archive',
             },
             {
-                label: '$(trash) Delete permanently',
+                label:       '$(trash) Delete permanently',
                 description: 'Cannot be undone',
-                value: 'delete',
+                value:       'delete',
             },
         ], { placeHolder: `${picks.length} context(s) selected — choose action` });
         if (!action) return;
@@ -430,13 +443,11 @@ function activate(context) {
 
         for (const pick of picks) {
             const ctx = loadContext(dir, pick._name);
-
             if (action.value === 'archive') {
                 archiveContext(dir, pick._name);
             } else {
                 deleteContext(dir, pick._name);
             }
-
             if (pick._name === active) {
                 await setActive(wsState, null);
                 clearInjectionForContext(ctx);
@@ -459,9 +470,9 @@ function activate(context) {
             const ctx      = loadArchivedContext(archiveName);
             const baseName = archiveName.replace(/_\d{13}$/, '');
             return {
-                label:       baseName,
-                description: ctx.root || 'no root',
-                detail:      `last used: ${formatRelativeTime(ctx.lastUsed)}  ·  created: ${formatRelativeTime(ctx.createdAt)}`,
+                label:        baseName,
+                description:  ctx.root || 'no root',
+                detail:       `last used: ${formatRelativeTime(ctx.lastUsed)}  ·  created: ${formatRelativeTime(ctx.createdAt)}`,
                 _archiveName: archiveName,
             };
         });

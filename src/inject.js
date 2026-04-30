@@ -1,3 +1,4 @@
+const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -5,6 +6,38 @@ const { ensureDir } = require('./context');
 
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
+
+// Maps agent ID → function that returns the file path(s) to inject into.
+// All paths are relative to ctx.root (the project folder).
+const AGENT_TARGETS = {
+    claude:   root => [path.join(root, 'CLAUDE.md')],
+    codex:    root => [path.join(root, 'AGENTS.md')],
+    copilot:  root => [path.join(root, '.github', 'copilot-instructions.md')],
+    cursor:   root => [path.join(root, '.cursorrules')],
+    windsurf: root => [path.join(root, '.windsurfrules')],
+    kilo:     root => [path.join(root, 'KILO.md')],
+};
+
+// Returns the configured list of agents from VS Code settings.
+// Defaults to ['claude', 'codex', 'copilot'] if not configured.
+function getAgents() {
+    const config = vscode.workspace.getConfiguration('aiContext');
+    const agents = config.get('agents');
+    return Array.isArray(agents) && agents.length > 0
+        ? agents
+        : ['claude', 'codex', 'copilot'];
+}
+
+// Returns all file paths that should be injected for the current agent config.
+function getInjectionTargets(root) {
+    const agents = getAgents();
+    const targets = [];
+    for (const agent of agents) {
+        const fn = AGENT_TARGETS[agent];
+        if (fn) targets.push(...fn(root));
+    }
+    return targets;
+}
 
 function buildInjectionBlock(ctx) {
     const s = typeof ctx.s === 'object' ? JSON.stringify(ctx.s) : (ctx.s || '{}');
@@ -51,24 +84,32 @@ function clearInjection(filePath) {
     );
 }
 
-// Injects into the project folder named in ctx.root.
+// Injects context into all configured agent files inside ctx.root.
 // Falls back to home dir if ctx.root is not set (legacy / unbound contexts).
 function autoInject(ctx) {
-    const root = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
-    injectIntoFile(path.join(root, 'CLAUDE.md'), buildInjectionBlock(ctx));
-    injectIntoFile(path.join(root, '.github', 'copilot-instructions.md'), buildInjectionBlock(ctx));
+    const root    = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
+    const block   = buildInjectionBlock(ctx);
+    const targets = getInjectionTargets(root);
+    for (const filePath of targets) {
+        injectIntoFile(filePath, block);
+    }
 }
 
-// Clears injection blocks from a specific project root.
+// Clears injection blocks from all configured agent files for a context.
 function clearInjectionForContext(ctx) {
-    const root = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
-    clearInjection(path.join(root, 'CLAUDE.md'));
-    clearInjection(path.join(root, '.github', 'copilot-instructions.md'));
+    const root    = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
+    const targets = getInjectionTargets(root);
+    for (const filePath of targets) {
+        clearInjection(filePath);
+    }
 }
 
 module.exports = {
     INJECT_START,
     INJECT_END,
+    AGENT_TARGETS,
+    getAgents,
+    getInjectionTargets,
     buildInjectionBlock,
     injectIntoFile,
     clearInjection,
