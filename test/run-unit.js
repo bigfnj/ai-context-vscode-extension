@@ -70,6 +70,7 @@ const context = require('../src/context');
 const inject = require('../src/inject');
 const claude = require('../src/claude');
 const extension = require('../src/extension');
+const permissions = require('../src/permissions');
 
 function tmpDir() {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'ai-context-runner-'));
@@ -447,5 +448,68 @@ function testSidecarRoundTrip() {
 
 testMemFormatFallback();
 testSidecarRoundTrip();
+
+function testGeneralizeClaudePerm() {
+    const projectRoot = '/home/bigfnj/projects/MyProject';
+
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('WebSearch', projectRoot), 'WebSearch', 'bare tool unchanged');
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('Bash(python3)', projectRoot), 'Bash(python3 *)', 'bare command gets trailing wildcard');
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('Bash(python3 -c \'import openpyxl; from openpyxl import load_workbook\')', projectRoot), 'Bash(python3 -c *)', 'python3 -c quoted arg becomes wildcard');
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('Bash(python3 -m pip show python-docx)', projectRoot), 'Bash(python3 -m *)', 'python3 -m args become wildcard');
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('Bash(sed -n \'70,80p\' /home/bigfnj/projects/MyProject/AI_UNDERSTANDING.md)', projectRoot), 'Bash(sed -n *)', 'sed with quoted range and path becomes wildcard');
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('Bash(git commit -m \'some message\')', projectRoot), 'Bash(git commit -m *)', 'git commit quoted message becomes wildcard');
+    assert.strictEqual(permissions.__test.generalizeClaudePerm('Bash(npx markdownlint-cli2 *)', projectRoot), 'Bash(npx markdownlint-cli2 *)', 'already wildcarded unchanged');
+}
+
+function testIsClaudePermCovered() {
+    assert.strictEqual(permissions.__test.isClaudePermCovered('WebSearch', ['WebSearch']), true, 'exact match');
+    assert.strictEqual(permissions.__test.isClaudePermCovered('Bash(python3 -c \'x\')', ['Bash(python3 -c *)']), true, 'wildcard covers specific');
+    assert.strictEqual(permissions.__test.isClaudePermCovered('Bash(python3 -c *)', ['Bash(python3 *)']), true, 'broader wildcard covers narrower');
+    assert.strictEqual(permissions.__test.isClaudePermCovered('Bash(git *)', ['Bash(python3 *)']), false, 'no match');
+    assert.strictEqual(permissions.__test.isClaudePermCovered('Bash(python3 *)', ['Bash(python3 -c *)']), false, 'narrower does not cover broader');
+}
+
+function testCaptureNewClaudePerms() {
+    const projectRoot = '/home/bigfnj/projects/MyProject';
+
+    // Test 1: deduplication across multiple new perms that generalize to same pattern
+    const before1 = ['WebSearch'];
+    const after1  = ['WebSearch', 'Bash(python3 -c \'x\')', 'Bash(python3 -c \'y\')'];
+    const result1 = permissions.__test.captureNewClaudePerms(before1, after1, projectRoot, []);
+    assert.deepStrictEqual(result1, ['Bash(python3 -c *)'], 'deduplicate multi new perms to same pattern');
+
+    // Test 2: new perm already covered by existing
+    const before2 = [];
+    const after2  = ['Bash(git commit -m \'msg\')'];
+    const existing2 = ['Bash(git *)'];
+    const result2 = permissions.__test.captureNewClaudePerms(before2, after2, projectRoot, existing2);
+    assert.deepStrictEqual(result2, [], 'new perm covered by existing');
+}
+
+function testUpdateCodexTomlContent() {
+    // Test 1: append new section
+    const content1 = 'model = "gpt-5.5"\nmodel_reasoning_effort = "xhigh"\n';
+    const result1 = permissions.__test.updateCodexTomlContent(content1, '/home/user/MyProject', 'trusted');
+    assert.ok(result1.includes('[projects."/home/user/MyProject"]'), 'new section header added');
+    assert.ok(result1.includes('trust_level = "trusted"'), 'trust_level added');
+
+    // Test 2: update existing section
+    const content2 = '[projects."/home/user/MyProject"]\ntrust_level = "low"\n';
+    const result2 = permissions.__test.updateCodexTomlContent(content2, '/home/user/MyProject', 'high');
+    assert.ok(result2.includes('trust_level = "high"'), 'trust_level updated to high');
+    assert.ok(!result2.includes('trust_level = "low"'), 'old trust_level removed');
+
+    // Test 3: preserve unrelated sections
+    const content3 = '[projects."/other"]\ntrust_level = "medium"\n[projects."/home/user/MyProject"]\ntrust_level = "low"\n';
+    const result3 = permissions.__test.updateCodexTomlContent(content3, '/home/user/MyProject', 'trusted');
+    assert.ok(result3.includes('[projects."/other"]'), 'unrelated section preserved');
+    assert.ok(result3.includes('trust_level = "medium"'), 'unrelated trust_level preserved');
+    assert.ok(result3.includes('trust_level = "trusted"'), 'target trust_level updated');
+}
+
+testGeneralizeClaudePerm();
+testIsClaudePermCovered();
+testCaptureNewClaudePerms();
+testUpdateCodexTomlContent();
 
 console.log('unit tests passed');

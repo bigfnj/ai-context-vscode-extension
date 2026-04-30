@@ -3,6 +3,8 @@ const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 
+const { readClaudeSettings, captureNewClaudePerms, isClaudePermCovered, applyClaudePerms, applyCodexTrust, consolidatePermissionsToGlobal } = require('./permissions');
+
 const {
     getCtxDir,
     listContexts,
@@ -136,7 +138,7 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
     if (matched) {
         setActive(wsState, matched);
         bootstrapFromGit(dir, matched);
-        autoInject(loadContext(dir, matched));
+        injectAndApplyPerms(dir, matched);
         if (matched !== previous && options.notify !== false) {
             notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
         }
@@ -144,7 +146,7 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
     }
 
     if (options.fallbackPrevious && previous) {
-        autoInject(loadContext(dir, previous));
+        injectAndApplyPerms(dir, previous);
         return previous;
     }
 
@@ -233,6 +235,18 @@ async function createContextWithRoot(dir, name) {
     return true;
 }
 
+// ── Permissions ───────────────────────────────────────────────────────────────
+
+function injectAndApplyPerms(dir, name) {
+    const ctx = loadContext(dir, name);
+    const result = autoInject(ctx);
+    if (ctx.perms) {
+        applyClaudePerms(ctx.perms.claude || []);
+        applyCodexTrust(ctx.root, ctx.perms.codex || 'trusted');
+    }
+    return result;
+}
+
 // ── Activate ──────────────────────────────────────────────────────────────────
 
 function activate(context) {
@@ -294,7 +308,7 @@ function activate(context) {
             fallbackPrevious: true,
         });
     } else if (getActive(trackedWsState)) {
-        autoInject(loadContext(dir, getActive(trackedWsState)));
+        injectAndApplyPerms(dir, getActive(trackedWsState));
     }
     updateStatusBar();
 
@@ -323,7 +337,7 @@ function activate(context) {
         if (!basename.endsWith('.json')) return;
         const changedName = path.basename(uri.fsPath, '.json');
         if (changedName === getActive(trackedWsState)) {
-            autoInject(loadContext(dir, changedName));
+            injectAndApplyPerms(dir, changedName);
         }
     };
 
@@ -492,6 +506,13 @@ function activate(context) {
                     _type:       'number',
                 },
                 {
+                    label:       '$(key)  Manage Permissions',
+                    description: `View & manage project permissions`,
+                    detail:      'View and remove per-project Claude/Codex permissions',
+                    _key:        '_managePerms',
+                    _type:       'action',
+                },
+                {
                     label:       '$(close)  Close',
                     _key:        null,
                 },
@@ -504,6 +525,14 @@ function activate(context) {
             });
 
             if (!pick || pick._key === null) return;
+
+            // ── Action (navigate to another menu) ────────────────────────────
+            if (pick._type === 'action') {
+                if (pick._key === '_managePerms') {
+                    await vscode.commands.executeCommand('ai.managePermissions');
+                }
+                continue;
+            }
 
             const previousProjectsRoot = getProjectsRoot();
 
@@ -587,7 +616,7 @@ function activate(context) {
         if (!pick) return;
 
         await setActive(trackedWsState, pick.label);
-        showInjectionResult(pick.label, agents, autoInject(loadContext(dir, pick.label)));
+        showInjectionResult(pick.label, agents, injectAndApplyPerms(dir, pick.label));
     });
 
     // ── AI: Run Task ──────────────────────────────────────────────────────────
@@ -604,6 +633,10 @@ function activate(context) {
 
         const ctx    = loadContext(dir, ctxName);
         const prompt = buildPrompt(ctx, task.trim());
+
+        // Snapshot Claude settings before task
+        const beforeSettings = readClaudeSettings();
+        const beforeAllow = (beforeSettings.permissions && beforeSettings.permissions.allow) ? [...beforeSettings.permissions.allow] : [];
 
         await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: `Running [${ctxName}] via ${getCliPath()}...`, cancellable: false },
@@ -624,6 +657,22 @@ function activate(context) {
                         root:      ctx.root,
                         createdAt: ctx.createdAt,
                     });
+
+                    // Capture new permissions granted during task
+                    const afterSettings = readClaudeSettings();
+                    const afterAllow = (afterSettings.permissions && afterSettings.permissions.allow) ? afterSettings.permissions.allow : [];
+                    const newPerms = captureNewClaudePerms(beforeAllow, afterAllow, ctx.root, ctx.perms && ctx.perms.claude ? ctx.perms.claude : []);
+
+                    if (newPerms.length > 0) {
+                        const savedCtx = loadContext(dir, ctxName);
+                        const merged = [...(savedCtx.perms && savedCtx.perms.claude ? savedCtx.perms.claude : [])];
+                        for (const p of newPerms) {
+                            if (!isClaudePermCovered(p, merged)) {
+                                merged.push(p);
+                            }
+                        }
+                        saveContext(dir, ctxName, { ...savedCtx, perms: { ...savedCtx.perms, claude: merged } });
+                    }
                 } else {
                     vscode.window.showWarningMessage('Response received but no CTX_UPDATE found — context unchanged');
                 }
@@ -666,6 +715,74 @@ function activate(context) {
         await vscode.window.showTextDocument(doc);
     });
 
+    // ── AI: Manage Permissions ────────────────────────────────────────────────
+    const managePermissions = vscode.commands.registerCommand('ai.managePermissions', async () => {
+        const ctxName = getActive(trackedWsState);
+        if (!ctxName) {
+            vscode.window.showWarningMessage('AI Context: no active context — set one first.');
+            return;
+        }
+
+        while (true) {
+            const ctx = loadContext(dir, ctxName);
+            const claudePerms = (ctx.perms && ctx.perms.claude) ? ctx.perms.claude : [];
+            const codexTrust  = (ctx.perms && ctx.perms.codex)  ? ctx.perms.codex  : 'trusted';
+
+            const items = [
+                ...claudePerms.map(p => ({
+                    label:       `$(key)  ${p}`,
+                    description: 'Claude — click to remove',
+                    _type:       'claude',
+                    _perm:       p,
+                })),
+                {
+                    label:       `$(shield)  Codex trust: ${codexTrust}`,
+                    description: 'click to change',
+                    _type:       'codex',
+                },
+                {
+                    label:       '$(close)  Close',
+                    _type:       'close',
+                },
+            ];
+
+            const pick = await vscode.window.showQuickPick(items, {
+                placeHolder: `[${ctxName}] — ${claudePerms.length} Claude permission(s) · Codex: ${codexTrust}`,
+                matchOnDescription: true,
+            });
+
+            if (!pick || pick._type === 'close') return;
+
+            if (pick._type === 'claude') {
+                const confirm = await vscode.window.showWarningMessage(
+                    `Remove permission: "${pick._perm}"?`,
+                    { modal: false },
+                    'Remove'
+                );
+                if (confirm === 'Remove') {
+                    const fresh = loadContext(dir, ctxName);
+                    const updated = (fresh.perms && fresh.perms.claude || []).filter(p => p !== pick._perm);
+                    saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, claude: updated } });
+                }
+            }
+
+            if (pick._type === 'codex') {
+                const trustOptions = ['untrusted', 'low', 'medium', 'high', 'trusted'].map(t => ({
+                    label: t,
+                    description: t === codexTrust ? '● current' : '',
+                }));
+                const selected = await vscode.window.showQuickPick(trustOptions, {
+                    placeHolder: 'Select Codex trust level',
+                });
+                if (selected) {
+                    const fresh = loadContext(dir, ctxName);
+                    saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, codex: selected.label } });
+                    applyCodexTrust(fresh.root, selected.label);
+                }
+            }
+        }
+    });
+
     // ── AI: New Context ───────────────────────────────────────────────────────
     const newContext = vscode.commands.registerCommand('ai.newContext', async () => {
         const existing = listContexts(dir);
@@ -689,7 +806,7 @@ function activate(context) {
         );
         if (makeActive === 'Yes') {
             await setActive(trackedWsState, name.trim());
-            showInjectionResult(name.trim(), getAgents().join(', '), autoInject(loadContext(dir, name.trim())));
+            showInjectionResult(name.trim(), getAgents().join(', '), injectAndApplyPerms(dir, name.trim()));
         }
     });
 
@@ -841,7 +958,7 @@ function activate(context) {
         );
         if (makeActive === 'Yes') {
             await setActive(trackedWsState, restoredName);
-            showInjectionResult(restoredName, getAgents().join(', '), autoInject(loadContext(dir, restoredName)));
+            showInjectionResult(restoredName, getAgents().join(', '), injectAndApplyPerms(dir, restoredName));
         }
     });
 
@@ -852,20 +969,30 @@ function activate(context) {
             vscode.window.showWarningMessage('AI Context: no active context — use "AI: Set Active Context" first.');
             return;
         }
-        const ctx     = loadContext(dir, name);
-        const injected = autoInject(ctx);
+        const injected = injectAndApplyPerms(dir, name);
         if (!injected) {
             vscode.window.showWarningMessage(`[${name}] root path is missing or invalid — nothing injected.`);
             return;
         }
+        const ctx = loadContext(dir, name);
         const targets = getInjectionTargets(normalizePath(ctx.root))
             .map(f => path.basename(f))
             .join(', ');
         vscode.window.showInformationMessage(`[${name}] reinjected into: ${targets}`);
     });
 
+    // ── Consolidate permissions at startup ──────────────────────────────────
+    const allContexts = listContexts(dir);
+    if (allContexts.length > 0) {
+        consolidatePermissionsToGlobal(
+            allContexts,
+            name => loadContext(dir, name),
+            (name, ctx) => saveContext(dir, name, ctx)
+        );
+    }
+
     context.subscriptions.push(
-        configCmd, setActiveCmd, runTask, viewContext, newContext,
+        configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
         deleteCtx, cleanUp, restoreCtx, reinjectCmd, watcher
     );
 }

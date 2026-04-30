@@ -147,6 +147,7 @@ function createDefaultContext(name, root = '') {
         m:         { compactedAt: null, compactionVersion: COMPACTION_VERSION },
         createdAt: new Date().toISOString(),
         lastUsed:  null,
+        perms:     { claude: [], codex: 'trusted' },
     };
 }
 
@@ -161,6 +162,11 @@ function normalizeContext(ctx, name) {
         ...srcMeta,
         compactionVersion: COMPACTION_VERSION,
         compactedAt: compacted.compacted ? new Date().toISOString() : (srcMeta.compactedAt || null),
+    };
+    const srcPerms = src.perms && typeof src.perms === 'object' && !Array.isArray(src.perms) ? src.perms : {};
+    const perms = {
+        claude: Array.isArray(srcPerms.claude) ? srcPerms.claude.filter(p => typeof p === 'string' && p.trim()) : [],
+        codex:  typeof srcPerms.codex === 'string' && srcPerms.codex.trim() ? srcPerms.codex.trim() : 'trusted',
     };
     return {
         ...base,
@@ -181,6 +187,7 @@ function normalizeContext(ctx, name) {
         e:         src.e === undefined ? null : src.e,
         i:         src.i || '',
         m,
+        perms,
         createdAt: src.createdAt || base.createdAt,
         lastUsed:  src.lastUsed || null,
     };

@@ -53,6 +53,10 @@
         "title": "AI: Reinject Active Context"
       },
       {
+        "command": "ai.managePermissions",
+        "title": "AI: Manage Permissions"
+      },
+      {
         "command": "ai.config",
         "title": "AI: Config"
       }
