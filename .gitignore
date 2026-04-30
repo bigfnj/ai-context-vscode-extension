@@ -1,3 +1,11 @@
 node_modules/
+.vscode-test/
 *.vsix
-*:Zone.Identifier
+.DS_Store
+*.log
+.vscode/launch.json
+.vscodeignore
+.workspace
+*.code-workspace
+.extension
+.settings/
