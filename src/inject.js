@@ -78,13 +78,14 @@ function getCodexTargets(root) {
 }
 
 // Maps agent ID → function(root) → array of file paths to inject into.
+// NOTE: kilo reads AGENTS.md (same as codex) — getInjectionTargets deduplicates.
 const AGENT_TARGETS = {
     claude:   root => [path.join(root, 'CLAUDE.md')],
     codex:    root => getCodexTargets(root),
     copilot:  root => [path.join(root, '.github', 'copilot-instructions.md')],
     cursor:   root => [path.join(root, '.cursorrules')],
     windsurf: root => [path.join(root, '.windsurfrules')],
-    kilo:     root => [path.join(root, 'KILO.md')],
+    kilo:     root => getCodexTargets(root),  // Kilo reads AGENTS.md, same as codex
 };
 
 // Returns the configured list of agents. Defaults to ['claude','codex','copilot'].
@@ -97,11 +98,20 @@ function getAgents() {
 }
 
 // Returns all injection target file paths for the given root + current agent config.
+// Deduplicates across agents so enabling both 'codex' and 'kilo' only writes AGENTS.md once.
 function getInjectionTargets(root) {
+    const seen    = new Set();
     const targets = [];
     for (const agent of getAgents()) {
         const fn = AGENT_TARGETS[agent];
-        if (fn) targets.push(...fn(root));
+        if (!fn) continue;
+        for (const filePath of fn(root)) {
+            const norm = normalizePath(filePath);
+            if (norm && !seen.has(norm)) {
+                seen.add(norm);
+                targets.push(filePath);
+            }
+        }
     }
     return targets;
 }

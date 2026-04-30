@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.8.2] — 2026-04-30
+
+### Fixed
+
+- `kilo` agent target corrected from `KILO.md` to `AGENTS.md` — Kilo reads `AGENTS.md`
+  not `KILO.md`, so users with `kilo` in their agents list were writing to a file that
+  was never picked up.
+- `getInjectionTargets()` now deduplicates across agents — enabling both `codex` and
+  `kilo` (both resolve to `AGENTS.md`) no longer causes a redundant double-write.
+
+---
+
 ## [2.8.1] — 2026-04-30
 
 ### Fixed
