@@ -154,7 +154,7 @@ function buildInjectionBlock(ctx, storePath) {
         `Use ${AGENT_CONTEXT_NAME} as authoritative session state. Continue from n; preserve mem/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.`,
     ];
     if (storePath) {
-        lines.push(`Persist: write the complete updated ${AGENT_CONTEXT_NAME} JSON to ${storePath} after each session so the VS Code extension can reload state next time.`);
+        lines.push(`After each response, write \`CTX_UPDATE:{...updated ${AGENT_CONTEXT_NAME} fields}\` as a single line to ${storePath}.update — the VS Code extension reads, merges, and deletes it automatically to persist state after every turn.`);
     }
     return lines.join('\n');
 }

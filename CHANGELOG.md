@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.8.4] - 2026-04-30
+
+### Added
+
+- Per-turn state persistence for interactive sessions: the injection block now
+  instructs the AI agent to write `CTX_UPDATE:{...}` to a sidecar file
+  (`~/.ai-context/[project].json.update`) after every response.
+- File watcher now consumes `.json.update` sidecars automatically — reads the
+  `CTX_UPDATE`, merges it into the context store, deletes the sidecar, and
+  re-injects. State is now captured after each interactive turn, not only when
+  the built-in Run Task command is used.
+
+---
+
 ## [2.8.3] - 2026-04-30
 
 ### Added

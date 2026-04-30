@@ -246,12 +246,29 @@ function activate(context) {
         autoInject(loadContext(dir, getActive(wsState)));
     }
 
-    // ── File watcher — re-inject when context JSON changes ───────────────────
+    // ── File watcher — re-inject on context JSON change; consume interactive CTX_UPDATE sidecars ──
     const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.Uri.file(dir), '*.json')
+        new vscode.RelativePattern(vscode.Uri.file(dir), '*')
     );
 
     const onContextChange = uri => {
+        const basename = path.basename(uri.fsPath);
+
+        // Interactive sessions write CTX_UPDATE:{...} to [name].json.update.
+        // Merge into the store and delete the sidecar; the .json save below re-triggers inject.
+        if (basename.endsWith('.json.update')) {
+            const name = basename.slice(0, -'.json.update'.length);
+            try {
+                if (!fs.existsSync(uri.fsPath)) return;
+                const update = extractContextUpdate(fs.readFileSync(uri.fsPath, 'utf8'));
+                if (!update) return;
+                saveContext(dir, name, { ...loadContext(dir, name), ...update });
+                try { fs.unlinkSync(uri.fsPath); } catch { /* ignore */ }
+            } catch { /* ignore */ }
+            return;
+        }
+
+        if (!basename.endsWith('.json')) return;
         const changedName = path.basename(uri.fsPath, '.json');
         if (changedName === getActive(wsState)) {
             autoInject(loadContext(dir, changedName));
