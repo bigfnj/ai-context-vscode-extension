@@ -192,6 +192,76 @@ function testInvalidRootIsSkipped() {
     assert.strictEqual(fs.existsSync(path.join(missingRoot, 'AGENTS.md')), false);
 }
 
+function testCodexTargetsNestedGitRoots() {
+    const dir = tmpDir();
+    const nestedRepo = path.join(dir, 'nested-repo');
+    fs.mkdirSync(path.join(nestedRepo, '.git'), { recursive: true });
+
+    const previousAgents = settings.agents;
+    settings.agents = ['codex'];
+
+    const targets = inject.getInjectionTargets(dir)
+        .map(filePath => path.relative(dir, filePath).replace(/\\/g, '/'))
+        .sort();
+
+    assert.deepStrictEqual(targets, [
+        'AGENTS.md',
+        'nested-repo/AGENTS.md',
+    ]);
+
+    settings.agents = previousAgents;
+}
+
+function testCodexTargetsDedupRootGitRepo() {
+    const dir = tmpDir();
+    fs.mkdirSync(path.join(dir, '.git'));
+
+    const previousAgents = settings.agents;
+    settings.agents = ['codex'];
+
+    assert.deepStrictEqual(inject.getInjectionTargets(dir), [path.join(dir, 'AGENTS.md')]);
+
+    settings.agents = previousAgents;
+}
+
+function testAutoInjectWritesNestedCodexTargets() {
+    const dir = tmpDir();
+    const nestedRepo = path.join(dir, 'nested-repo');
+    fs.mkdirSync(path.join(nestedRepo, '.git'), { recursive: true });
+
+    const previousAgents = settings.agents;
+    settings.agents = ['codex'];
+
+    const result = inject.autoInject({
+        v: 3,
+        p: 'Nested',
+        root: dir,
+        t: 'init',
+        s: {},
+        a: [],
+    });
+
+    assert.strictEqual(result, true);
+    assert.ok(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8').includes(inject.AGENT_CONTEXT_NAME));
+    assert.ok(fs.readFileSync(path.join(nestedRepo, 'AGENTS.md'), 'utf8').includes(inject.AGENT_CONTEXT_NAME));
+
+    settings.agents = previousAgents;
+}
+
+function testGitignoreUsesNestedGitRoot() {
+    const dir = tmpDir();
+    const nestedRepo = path.join(dir, 'nested-repo');
+    fs.mkdirSync(path.join(nestedRepo, '.git'), { recursive: true });
+
+    inject.updateGitignore(dir, [
+        path.join(dir, 'AGENTS.md'),
+        path.join(nestedRepo, 'AGENTS.md'),
+    ]);
+
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), 'AGENTS.md\n');
+    assert.strictEqual(fs.readFileSync(path.join(nestedRepo, '.gitignore'), 'utf8'), 'AGENTS.md\n');
+}
+
 function testContextUpdateParsing() {
     const response = [
         'CTX_UPDATE:{"old":true}',
@@ -208,6 +278,10 @@ testCompactInjectionProjection();
 testPathContainment();
 testInjectionMarkerRepair();
 testInvalidRootIsSkipped();
+testCodexTargetsNestedGitRoots();
+testCodexTargetsDedupRootGitRepo();
+testAutoInjectWritesNestedCodexTargets();
+testGitignoreUsesNestedGitRoot();
 testContextUpdateParsing();
 
 console.log('unit tests passed');

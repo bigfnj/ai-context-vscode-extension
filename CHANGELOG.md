@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Codex injection now writes `AGENTS.md` into nested Git repository roots under a
+  context root, not only the top-level context folder. This fixes projects where
+  VS Code is opened at a parent folder but Codex runs from a child Git repo.
+- Auto `.gitignore` updates are now Git-root aware, so generated nested `AGENTS.md`
+  files are ignored by the nested repository that actually sees them.
+
+---
+
 ## [2.8.0] — 2026-04-30
 
 ### Changed

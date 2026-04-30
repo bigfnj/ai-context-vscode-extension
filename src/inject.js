@@ -6,11 +6,81 @@ const { ensureDir, normalizePath } = require('./context');
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
 const AGENT_CONTEXT_NAME = 'AI_CONTEXT_V3';
+const CODEX_REPO_SCAN_MAX_DEPTH = 4;
+const CODEX_REPO_SCAN_SKIP_DIRS = new Set([
+    '.git',
+    '.vs',
+    '.vscode',
+    'bin',
+    'build',
+    'coverage',
+    'dist',
+    'node_modules',
+    'obj',
+    'out',
+    'packages',
+]);
+
+function uniquePaths(paths) {
+    const seen = new Set();
+    const result = [];
+    for (const filePath of paths) {
+        const normalized = normalizePath(filePath);
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        result.push(normalized);
+    }
+    return result;
+}
+
+function isGitRepoRoot(dir) {
+    try {
+        return fs.existsSync(path.join(dir, '.git'));
+    } catch {
+        return false;
+    }
+}
+
+function findGitRepoRoots(root, maxDepth = CODEX_REPO_SCAN_MAX_DEPTH) {
+    const normalizedRoot = normalizePath(root);
+    if (!normalizedRoot || !fs.existsSync(normalizedRoot)) return [];
+
+    const repos = [];
+    const walk = (dir, depth) => {
+        if (isGitRepoRoot(dir)) {
+            repos.push(dir);
+        }
+        if (depth >= maxDepth) return;
+
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+            return;
+        }
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            if (CODEX_REPO_SCAN_SKIP_DIRS.has(entry.name)) continue;
+            walk(path.join(dir, entry.name), depth + 1);
+        }
+    };
+
+    walk(normalizedRoot, 0);
+    return uniquePaths(repos);
+}
+
+function getCodexTargets(root) {
+    return uniquePaths([
+        path.join(root, 'AGENTS.md'),
+        ...findGitRepoRoots(root).map(repoRoot => path.join(repoRoot, 'AGENTS.md')),
+    ]);
+}
 
 // Maps agent ID → function(root) → array of file paths to inject into.
 const AGENT_TARGETS = {
     claude:   root => [path.join(root, 'CLAUDE.md')],
-    codex:    root => [path.join(root, 'AGENTS.md')],
+    codex:    root => getCodexTargets(root),
     copilot:  root => [path.join(root, '.github', 'copilot-instructions.md')],
     cursor:   root => [path.join(root, '.cursorrules')],
     windsurf: root => [path.join(root, '.windsurfrules')],
@@ -107,19 +177,30 @@ function clearInjection(filePath) {
     fs.writeFileSync(filePath, next ? `${next}\n` : '');
 }
 
-// Adds injection target filenames to .gitignore if not already present.
-function updateGitignore(projectRoot, targetPaths) {
-    const gitignorePath = path.join(projectRoot, '.gitignore');
+function getGitignoreRoot(projectRoot, filePath) {
+    const boundary = path.resolve(normalizePath(projectRoot));
+    let dir = path.resolve(path.dirname(filePath));
+
+    while (dir === boundary || dir.startsWith(boundary + path.sep)) {
+        if (isGitRepoRoot(dir)) return dir;
+        if (dir === boundary) break;
+        dir = path.dirname(dir);
+    }
+
+    return boundary;
+}
+
+function updateGitignoreFile(gitignoreRoot, targetPaths) {
+    const gitignorePath = path.join(gitignoreRoot, '.gitignore');
     let content = fs.existsSync(gitignorePath)
         ? fs.readFileSync(gitignorePath, 'utf8')
         : '';
 
-    const lines   = content.split('\n').map(l => l.trim());
-    const toAdd   = [];
+    const lines = content.split('\n').map(l => l.trim());
+    const toAdd = [];
 
     for (const filePath of targetPaths) {
-        // Store as path relative to project root
-        const rel = path.relative(projectRoot, filePath).replace(/\\/g, '/');
+        const rel = path.relative(gitignoreRoot, filePath).replace(/\\/g, '/');
         if (!lines.includes(rel)) toAdd.push(rel);
     }
 
@@ -127,6 +208,22 @@ function updateGitignore(projectRoot, targetPaths) {
 
     const sep = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
     fs.writeFileSync(gitignorePath, content + sep + toAdd.join('\n') + '\n');
+}
+
+// Adds injection target filenames to .gitignore if not already present.
+function updateGitignore(projectRoot, targetPaths) {
+    const grouped = new Map();
+
+    for (const filePath of targetPaths) {
+        const gitignoreRoot = getGitignoreRoot(projectRoot, filePath);
+        const paths = grouped.get(gitignoreRoot) || [];
+        paths.push(filePath);
+        grouped.set(gitignoreRoot, paths);
+    }
+
+    for (const [gitignoreRoot, paths] of grouped) {
+        updateGitignoreFile(gitignoreRoot, paths);
+    }
 }
 
 function getValidContextRoot(ctx) {
@@ -178,9 +275,12 @@ module.exports = {
     AGENT_TARGETS,
     getAgents,
     getInjectionTargets,
+    findGitRepoRoots,
+    getCodexTargets,
     buildAgentContext,
     buildInjectionBlock,
     findInjectionRange,
+    getGitignoreRoot,
     getValidContextRoot,
     injectIntoFile,
     clearInjection,

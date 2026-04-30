@@ -28,6 +28,11 @@ Context JSON files live in `~/.ai-context/` — your home directory. The injecte
 files (`CLAUDE.md`, `AGENTS.md`, etc.) are materialized into each project folder
 on demand and are always derived from the home-directory store.
 
+For Codex, `AGENTS.md` is also written into nested Git repository roots found
+under the context root. Codex scopes model-visible instructions to its current
+working root, so a workspace like `/home/Vibe-Projects/AIContext` with a nested
+repo at `AIContext/ai-context-extension` needs an `AGENTS.md` in both places.
+
 Multiple windows work independently. Each window auto-detects its own context on
 open. Changing the active context in one window does not affect any other window.
 
@@ -77,10 +82,10 @@ Open VS Code Settings (`Ctrl+,`) and search for **AI Context**:
 
 ### Supported agents
 
-| Value | File written to project root |
+| Value | File written |
 |---|---|
 | `claude` | `CLAUDE.md` |
-| `codex` | `AGENTS.md` |
+| `codex` | `AGENTS.md` in the context root and nested Git repo roots |
 | `copilot` | `.github/copilot-instructions.md` |
 | `cursor` | `.cursorrules` |
 | `windsurf` | `.windsurfrules` |
@@ -132,6 +137,23 @@ When you open a project folder, the extension:
 **Example**: With contexts for `/home/Vibe-Projects/ProjectA` and
 `/home/Vibe-Projects/ProjectB`, opening either folder loads the correct context
 automatically.
+
+### Codex and nested Git repos
+
+Codex reads `AGENTS.md` from the working root it runs in. If VS Code is opened at
+a parent project folder but Codex operates in a nested Git repo, the parent
+`AGENTS.md` may not be included in Codex's prompt. AI Context Runner handles this
+by scanning for nested Git roots and injecting the same compact context into each
+nested repo's `AGENTS.md`.
+
+You can verify what Codex sees with its local debugger:
+
+```bash
+codex debug prompt-input "probe context"
+```
+
+The output should include an `AGENTS.md instructions for ...` block containing
+`AI_CONTEXT_V3`.
 
 ## Context storage
 
