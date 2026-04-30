@@ -1,11 +1,11 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
-const { ensureDir } = require('./context');
+const { ensureDir, normalizePath } = require('./context');
 
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
+const AGENT_CONTEXT_NAME = 'AI_CONTEXT_V3';
 
 // Maps agent ID → function(root) → array of file paths to inject into.
 const AGENT_TARGETS = {
@@ -36,33 +36,59 @@ function getInjectionTargets(root) {
     return targets;
 }
 
+function asArray(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function asObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function buildAgentContext(ctx) {
+    return {
+        v:    ctx.v || 3,
+        p:    ctx.p || '',
+        root: ctx.root || '',
+        t:    ctx.t || '',
+        i:    ctx.i || '',
+        n:    ctx.n || '',
+        s:    asObject(ctx.s),
+        mem:  {
+            b: asArray(ctx.b),
+            d: asArray(ctx.d),
+            c: asArray(ctx.c),
+            f: asArray(ctx.f),
+        },
+        h: asArray(ctx.h),
+        a: asArray(ctx.a),
+        e: ctx.e === undefined ? null : ctx.e,
+    };
+}
+
 function buildInjectionBlock(ctx) {
-    const s = typeof ctx.s === 'object' ? JSON.stringify(ctx.s) : (ctx.s || '{}');
-    const a = Array.isArray(ctx.a) ? ctx.a.join(', ') : (ctx.a || '');
+    const projected = buildAgentContext(ctx);
     return [
-        '[Auto-injected by AI Context Runner — do not edit this block manually]',
-        `Project : ${ctx.p    || ''}`,
-        `Root    : ${ctx.root || ''}`,
-        `Task    : ${ctx.t    || ''}`,
-        `Intent  : ${ctx.i    || ''}`,
-        `State   : ${s}`,
-        `Actions : ${a}`,
-        `Error   : ${ctx.e   || 'none'}`,
-        '',
-        'Resume this session from the above state. Do not ask for context — continue execution immediately.',
-        `Raw context (machine-readable): ${JSON.stringify(ctx)}`,
+        `${AGENT_CONTEXT_NAME}=${JSON.stringify(projected)}`,
+        `Use ${AGENT_CONTEXT_NAME} as authoritative session state. Continue from n; preserve mem/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.`,
     ].join('\n');
+}
+
+function findInjectionRange(content) {
+    const start = content.indexOf(INJECT_START);
+    if (start === -1) return null;
+    const endStart = content.indexOf(INJECT_END, start);
+    const end      = endStart === -1 ? content.length : endStart + INJECT_END.length;
+    return { start, end };
 }
 
 function injectIntoFile(filePath, blockContent) {
     ensureDir(path.dirname(filePath));
-    let existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+    const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
     const block  = `${INJECT_START}\n${blockContent}\n${INJECT_END}`;
+    const range  = findInjectionRange(existing);
 
-    if (existing.includes(INJECT_START)) {
-        const start = existing.indexOf(INJECT_START);
-        const end   = existing.indexOf(INJECT_END, start) + INJECT_END.length;
-        fs.writeFileSync(filePath, existing.slice(0, start) + block + existing.slice(end));
+    if (range) {
+        fs.writeFileSync(filePath, existing.slice(0, range.start) + block + existing.slice(range.end));
     } else {
         const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : '\n';
         fs.writeFileSync(filePath, existing + sep + block + '\n');
@@ -72,13 +98,13 @@ function injectIntoFile(filePath, blockContent) {
 function clearInjection(filePath) {
     if (!fs.existsSync(filePath)) return;
     const content = fs.readFileSync(filePath, 'utf8');
-    if (!content.includes(INJECT_START)) return;
-    const start = content.indexOf(INJECT_START);
-    const end   = content.indexOf(INJECT_END, start) + INJECT_END.length;
-    fs.writeFileSync(
-        filePath,
-        (content.slice(0, start).trimEnd() + '\n' + content.slice(end)).trimStart()
-    );
+    const range   = findInjectionRange(content);
+    if (!range) return;
+
+    const before = content.slice(0, range.start).trimEnd();
+    const after  = content.slice(range.end).trimStart();
+    const next   = [before, after].filter(Boolean).join('\n\n');
+    fs.writeFileSync(filePath, next ? `${next}\n` : '');
 }
 
 // Adds injection target filenames to .gitignore if not already present.
@@ -103,11 +129,22 @@ function updateGitignore(projectRoot, targetPaths) {
     fs.writeFileSync(gitignorePath, content + sep + toAdd.join('\n') + '\n');
 }
 
+function getValidContextRoot(ctx) {
+    const root = ctx.root && ctx.root.trim() ? normalizePath(ctx.root) : '';
+    if (!root) return null;
+    try {
+        return fs.existsSync(root) && fs.statSync(root).isDirectory() ? root : null;
+    } catch {
+        return null;
+    }
+}
+
 // Injects context into all configured agent files inside ctx.root.
-// Falls back to home dir if ctx.root is not set.
 // Optionally updates .gitignore if aiContext.autoGitignore is enabled.
 function autoInject(ctx) {
-    const root    = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
+    const root    = getValidContextRoot(ctx);
+    if (!root) return false;
+
     const block   = buildInjectionBlock(ctx);
     const targets = getInjectionTargets(root);
 
@@ -119,24 +156,32 @@ function autoInject(ctx) {
     if (config.get('autoGitignore')) {
         updateGitignore(root, targets);
     }
+    return true;
 }
 
 // Clears injection blocks from all configured agent files for a context.
 function clearInjectionForContext(ctx) {
-    const root    = ctx.root && ctx.root.trim() ? ctx.root.trim() : os.homedir();
+    const root    = getValidContextRoot(ctx);
+    if (!root) return false;
+
     const targets = getInjectionTargets(root);
     for (const filePath of targets) {
         clearInjection(filePath);
     }
+    return true;
 }
 
 module.exports = {
     INJECT_START,
     INJECT_END,
+    AGENT_CONTEXT_NAME,
     AGENT_TARGETS,
     getAgents,
     getInjectionTargets,
+    buildAgentContext,
     buildInjectionBlock,
+    findInjectionRange,
+    getValidContextRoot,
     injectIntoFile,
     clearInjection,
     updateGitignore,

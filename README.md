@@ -13,7 +13,7 @@ the matching context into every configured AI agent file simultaneously.
 ```
 VS Code opens a project folder
   → extension matches path against ~/.ai-context/*.json roots
-  → finds best match (longest prefix wins)
+  → finds best containing root (most specific wins)
   → injects into CLAUDE.md + AGENTS.md + .github/copilot-instructions.md
   → open Claude Code, Codex, Copilot — context already there
 
@@ -44,7 +44,7 @@ take effect on reload without repackaging:
 ```bash
 mkdir -p ~/.vscode-server/extensions
 ln -s /home/Vibe-Projects/AIContext/ai-context-extension \
-      ~/.vscode-server/extensions/local.ai-context-runner-2.4.0
+      ~/.vscode-server/extensions/local.ai-context-runner-2.8.0
 ```
 
 Then reload VS Code:
@@ -56,7 +56,7 @@ Ctrl+Shift+P → Developer: Reload Window
 Verify installation:
 
 ```
-Ctrl+Shift+P → type "AI:" — all 7 commands should appear
+Ctrl+Shift+P → type "AI:" — all 8 commands should appear
 ```
 
 ## Configuration
@@ -67,6 +67,13 @@ Open VS Code Settings (`Ctrl+,`) and search for **AI Context**:
 |---|---|---|
 | `aiContext.projectsRoot` | _(empty)_ | Root folder for the project picker. Set to e.g. `/home/Vibe-Projects` for WSL. Falls back to `~/projects` if blank. |
 | `aiContext.agents` | `["claude","codex","copilot"]` | Which AI agents receive context injection on workspace open. |
+| `aiContext.cliPath` | _(empty)_ | Full path to the `claude` binary. Uses `claude` from PATH when blank. |
+| `aiContext.autoDetect` | `true` | Auto-load matching context when opening a project folder. |
+| `aiContext.scanOnLaunch` | `true` | Scan `projectsRoot` on launch and create context files for new projects. |
+| `aiContext.showNotifications` | `true` | Show informational context load/switch notifications. |
+| `aiContext.autoGitignore` | `false` | Add injected agent files to project `.gitignore`. |
+| `aiContext.contextDir` | _(empty)_ | Override the context store directory. Falls back to `~/.ai-context`. |
+| `aiContext.maxActions` | `40` | Maximum recent actions kept in context history. |
 
 ### Supported agents
 
@@ -111,13 +118,14 @@ for the current window.
 | `AI: Delete Context` | — | Permanently delete a context |
 | `AI: Clean Up Contexts` | — | Bulk archive or delete — orphan detection, age display |
 | `AI: Restore Archived Context` | — | Restore a previously archived context |
+| `AI: Config` | `Ctrl+Alt+C` | Interactive configuration menu |
 
 ## Auto-detection behavior
 
 When you open a project folder, the extension:
 
 1. Scans all contexts in `~/.ai-context/*.json`
-2. Finds the context whose `root` is the **longest path prefix** of your workspace folder
+2. Finds the context whose `root` is the most specific parent of your workspace folder
 3. Sets it active and injects into all configured agent files silently
 4. Only shows a notification if it switches away from a previously active context
 
@@ -143,15 +151,25 @@ a project. Injection writes derived files into each project folder.
 
 ```json
 {
-  "v": 1,
+  "v": 3,
   "u": "username",
   "p": "project-name",
   "root": "/home/Vibe-Projects/ProjectA",
   "t": "current-task",
   "s": {},
+  "n": "next concrete action",
+  "b": [],
+  "d": [],
+  "c": [],
+  "f": [],
+  "h": [],
   "a": [],
   "e": null,
   "i": "intent / goal",
+  "m": {
+    "compactedAt": null,
+    "compactionVersion": 1
+  },
   "createdAt": "2026-04-28T12:00:00.000Z",
   "lastUsed": "2026-04-28T14:30:00.000Z"
 }
@@ -165,11 +183,39 @@ a project. Injection writes derived files into each project folder.
 | `root` | Absolute path to the project folder |
 | `t` | Current task |
 | `s` | State — active working object, params, conditions |
+| `n` | Next concrete action |
+| `b` | Blockers / open issues, capped at 15 |
+| `d` | Durable decisions, capped at 20 |
+| `c` | Constraints / rules to preserve, capped at 20 |
+| `f` | Important files, capped at 30 |
+| `h` | Compacted summaries of older actions, capped at 12 |
 | `a` | Recent actions (string array) |
 | `e` | Last error, or null |
 | `i` | Intent / goal |
+| `m` | Optional metadata |
 | `createdAt` | Set once on creation, never modified |
 | `lastUsed` | Updated automatically on every save |
+
+## Memory policy
+
+The context file separates durable memory from recent activity:
+
+- `d`, `c`, `f`, and `b` are durable memory fields. Keep these compact and only store information that should survive across sessions.
+- `a` is a recent activity trail. The default cap is 40 actions and is configurable with `aiContext.maxActions`.
+- When `a` exceeds the cap, older overflow is summarized into `h` before trimming. The agent receives both compact history and recent actions.
+- Older or repeated list entries are normalized on save. Lists are deduplicated and trimmed from the oldest entries first.
+
+## Injected format
+
+The full context stays in `~/.ai-context/`. Agent files receive a compact projection:
+
+```text
+AI_CONTEXT_V3={"v":3,"p":"ProjectA","root":"/home/Vibe-Projects/ProjectA","t":"current-task","i":"intent / goal","n":"next concrete action","s":{},"mem":{"b":[],"d":[],"c":[],"f":[]},"h":[],"a":[],"e":null}
+Use AI_CONTEXT_V3 as authoritative session state. Continue from n; preserve mem/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.
+```
+
+The injected projection omits bookkeeping such as `createdAt`, `lastUsed`, and
+compaction metadata to reduce token cost for agents.
 
 ## What to gitignore in your projects
 

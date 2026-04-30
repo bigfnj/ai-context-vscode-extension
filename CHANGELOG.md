@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.8.0] — 2026-04-30
+
+### Changed
+
+- Replaced the verbose injected context block with a compact `AI_CONTEXT_V3=...`
+  projection plus one instruction line.
+- Agent-facing injection now groups durable memory under `mem` and omits bookkeeping
+  fields such as `createdAt`, `lastUsed`, and compaction metadata.
+- Full context JSON is still preserved on disk in `~/.ai-context/`.
+
+---
+
+## [2.7.0] — 2026-04-30
+
+### Added
+
+- Context schema v3 `h` field for compacted summaries of older actions.
+- Deterministic action compaction: when `a[]` exceeds `aiContext.maxActions`, the
+  oldest overflow is summarized into `h[]` before recent actions are trimmed.
+- Compaction metadata under `m.compactedAt` and `m.compactionVersion`.
+
+### Changed
+
+- Injected agent context now includes `History` alongside `Actions`.
+- Claude handoff prompt now documents `h[]` and emits schema version 3.
+- `AI: Run Task` now merges partial `CTX_UPDATE` payloads onto the existing context,
+  so omitted fields are preserved.
+
+---
+
+## [2.6.0] — 2026-04-30
+
+### Added
+
+- Context schema v2 memory fields:
+  - `n` for the next concrete action
+  - `b` for blockers
+  - `d` for durable decisions
+  - `c` for constraints
+  - `f` for important files
+  - `m` for metadata
+- No-dependency unit test harness for context normalization, path containment,
+  injection marker repair, invalid-root skips, and `CTX_UPDATE` parsing.
+
+### Changed
+
+- Default `aiContext.maxActions` increased from 20 to 40.
+- `saveContext()` now normalizes context files, deduplicates list fields, and trims
+  each memory list by purpose.
+- Auto-detection now uses path containment instead of raw string-prefix matching, so
+  `/Project` no longer matches `/ProjectX`.
+- Injection now skips missing or invalid context roots instead of falling back to the
+  home directory.
+- The Claude handoff prompt now tells the agent which fields are durable memory and
+  which field is recent activity.
+
+### Fixed
+
+- Replacing or clearing an injected block is now safe when the end marker is missing.
+- README setup instructions now match the current extension version and command count.
+
+---
+
 ## [2.5.0] — 2026-04-29
 
 ### Added

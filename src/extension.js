@@ -1,7 +1,6 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 
 const {
     getCtxDir,
@@ -16,6 +15,7 @@ const {
     listProjectDirs,
     getProjectsRoot,
     normalizePath,
+    createDefaultContext,
     getWorkspaceRoot,
     scanAndCreateContexts,
     formatRelativeTime,
@@ -46,7 +46,23 @@ function notify(message) {
     }
 }
 
-// Best-match: longest ctx.root that is a prefix of workspaceRoot.
+function showInjectionResult(name, agents, injected) {
+    if (injected) {
+        vscode.window.showInformationMessage(`[${name}] active — injected for: ${agents}`);
+    } else {
+        vscode.window.showWarningMessage(`[${name}] active, but its root is missing or invalid — no files injected.`);
+    }
+}
+
+function isSameOrChildPath(parent, candidate) {
+    if (!parent || !candidate) return false;
+    const parentPath    = path.resolve(normalizePath(parent));
+    const candidatePath = path.resolve(normalizePath(candidate));
+    const relative      = path.relative(parentPath, candidatePath);
+    return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+// Best-match: longest ctx.root that contains the workspace root.
 function detectContextForPath(dir, workspaceRoot) {
     const normalized = normalizePath(workspaceRoot);
     let matchedName  = null;
@@ -56,7 +72,7 @@ function detectContextForPath(dir, workspaceRoot) {
         const ctx  = loadContext(dir, name);
         const root = normalizePath(ctx.root);
         if (root && fs.existsSync(root) &&
-            normalized.startsWith(root) &&
+            isSameOrChildPath(root, normalized) &&
             root.length > longestRoot) {
             matchedName = name;
             longestRoot = root.length;
@@ -143,18 +159,7 @@ async function createContextWithRoot(dir, name) {
 
     if (!projectRoot) return false;
 
-    saveContext(dir, name, {
-        v:         1,
-        u:         os.userInfo().username,
-        p:         name,
-        root:      normalizePath(projectRoot),
-        t:         'init',
-        s:         {},
-        a:         [],
-        e:         null,
-        i:         '',
-        createdAt: new Date().toISOString(),
-    });
+    saveContext(dir, name, createDefaultContext(name, projectRoot));
     return true;
 }
 
@@ -250,7 +255,7 @@ function activate(context) {
             const scanOnLaunch = cfg.get('scanOnLaunch') !== false;
             const showNotif    = cfg.get('showNotifications') !== false;
             const autoGit      = cfg.get('autoGitignore') === true;
-            const maxAct       = num('maxActions', 20);
+            const maxAct       = num('maxActions', 40);
 
             const items = [
                 {
@@ -359,7 +364,7 @@ function activate(context) {
 
             // ── Number ─────────────────────────────────────────────────────
             } else if (pick._type === 'number') {
-                const current = String(num(pick._key, 20));
+                const current = String(num(pick._key, 40));
                 const input   = await vscode.window.showInputBox({
                     prompt:        `Set "${pick._key}"`,
                     value:         current,
@@ -411,10 +416,7 @@ function activate(context) {
         if (!pick) return;
 
         await setActive(wsState, pick.label);
-        autoInject(loadContext(dir, pick.label));
-        vscode.window.showInformationMessage(
-            `[${pick.label}] active — injected for: ${agents}`
-        );
+        showInjectionResult(pick.label, agents, autoInject(loadContext(dir, pick.label)));
     });
 
     // ── AI: Run Task ──────────────────────────────────────────────────────────
@@ -445,9 +447,12 @@ function activate(context) {
 
                 const newCtx = extractContextUpdate(response);
                 if (newCtx) {
-                    newCtx.root      = ctx.root;
-                    newCtx.createdAt = ctx.createdAt;
-                    saveContext(dir, ctxName, newCtx);
+                    saveContext(dir, ctxName, {
+                        ...ctx,
+                        ...newCtx,
+                        root:      ctx.root,
+                        createdAt: ctx.createdAt,
+                    });
                 } else {
                     vscode.window.showWarningMessage('Response received but no CTX_UPDATE found — context unchanged');
                 }
@@ -513,10 +518,7 @@ function activate(context) {
         );
         if (makeActive === 'Yes') {
             await setActive(wsState, name.trim());
-            autoInject(loadContext(dir, name.trim()));
-            vscode.window.showInformationMessage(
-                `[${name.trim()}] active — injected for: ${getAgents().join(', ')}`
-            );
+            showInjectionResult(name.trim(), getAgents().join(', '), autoInject(loadContext(dir, name.trim())));
         }
     });
 
@@ -668,7 +670,7 @@ function activate(context) {
         );
         if (makeActive === 'Yes') {
             await setActive(wsState, restoredName);
-            autoInject(loadContext(dir, restoredName));
+            showInjectionResult(restoredName, getAgents().join(', '), autoInject(loadContext(dir, restoredName)));
         }
     });
 
@@ -680,4 +682,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, __test: { detectContextForPath, isSameOrChildPath } };

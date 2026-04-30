@@ -3,6 +3,18 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const DEFAULT_CONTEXT_VERSION = 3;
+const DEFAULT_MAX_ACTIONS = 40;
+const DEFAULT_MAX_HISTORY = 12;
+const MEMORY_LIMITS = {
+    b: 15, // blockers
+    c: 20, // constraints
+    d: 20, // durable decisions
+    f: 30, // important files
+    h: DEFAULT_MAX_HISTORY, // compacted history summaries
+};
+const COMPACTION_VERSION = 1;
+
 // Returns the context store directory — respects aiContext.contextDir override.
 function getCtxDir() {
     const config    = vscode.workspace.getConfiguration('aiContext');
@@ -46,6 +58,133 @@ function ensureDir(dir) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+function asList(value) {
+    if (!Array.isArray(value)) return [];
+    const seen   = new Set();
+    const result = [];
+    for (let i = value.length - 1; i >= 0; i--) {
+        if (value[i] === null || value[i] === undefined) continue;
+        const item = String(value[i]).trim();
+        if (!item || seen.has(item)) continue;
+        seen.add(item);
+        result.unshift(item);
+    }
+    return result;
+}
+
+function trimList(value, max) {
+    return asList(value).slice(-max);
+}
+
+function compactText(value, maxLength = 80) {
+    const text = String(value).replace(/\s+/g, ' ').trim();
+    return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function summarizeActions(actions, date = new Date()) {
+    const items = asList(actions).map(action => compactText(action));
+    if (items.length === 0) return null;
+
+    const shown = items.length <= 8
+        ? items
+        : [...items.slice(0, 4), '...', ...items.slice(-4)];
+    const day = date.toISOString().slice(0, 10);
+    const label = items.length === 1 ? 'action' : 'actions';
+    return compactText(`${day}: compacted ${items.length} older ${label}: ${shown.join(' -> ')}`, 600);
+}
+
+function compactActions(actions, history, maxActions = DEFAULT_MAX_ACTIONS) {
+    const cleanActions = asList(actions);
+    const cleanHistory = asList(history);
+    const max = Number.isFinite(maxActions) && maxActions > 0
+        ? Math.floor(maxActions)
+        : DEFAULT_MAX_ACTIONS;
+    if (cleanActions.length <= max) {
+        return {
+            actions: cleanActions,
+            history: cleanHistory.slice(-MEMORY_LIMITS.h),
+            compacted: false,
+        };
+    }
+
+    const overflow = cleanActions.slice(0, cleanActions.length - max);
+    const summary  = summarizeActions(overflow);
+    return {
+        actions: cleanActions.slice(-max),
+        history: summary ? [...cleanHistory, summary].slice(-MEMORY_LIMITS.h) : cleanHistory.slice(-MEMORY_LIMITS.h),
+        compacted: !!summary,
+    };
+}
+
+function asObject(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function getMaxActions() {
+    const config     = vscode.workspace.getConfiguration('aiContext');
+    const configured = Number(config.get('maxActions'));
+    if (!Number.isFinite(configured) || configured < 1) return DEFAULT_MAX_ACTIONS;
+    return Math.min(Math.floor(configured), 200);
+}
+
+function createDefaultContext(name, root = '') {
+    return {
+        v:         DEFAULT_CONTEXT_VERSION,
+        u:         os.userInfo().username,
+        p:         name,
+        root:      normalizePath(root || ''),
+        t:         'init',
+        s:         {},
+        n:         '',
+        b:         [],
+        d:         [],
+        c:         [],
+        f:         [],
+        h:         [],
+        a:         [],
+        e:         null,
+        i:         '',
+        m:         { compactedAt: null, compactionVersion: COMPACTION_VERSION },
+        createdAt: new Date().toISOString(),
+        lastUsed:  null,
+    };
+}
+
+function normalizeContext(ctx, name) {
+    const base = createDefaultContext(name);
+    const src  = ctx && typeof ctx === 'object' ? ctx : {};
+    const compacted = compactActions(src.a, src.h, getMaxActions());
+    const srcMeta = asObject(src.m);
+    const m = {
+        ...base.m,
+        ...srcMeta,
+        compactionVersion: COMPACTION_VERSION,
+        compactedAt: compacted.compacted ? new Date().toISOString() : (srcMeta.compactedAt || null),
+    };
+    return {
+        ...base,
+        ...src,
+        v:         Number.isInteger(src.v) ? Math.max(src.v, DEFAULT_CONTEXT_VERSION) : base.v,
+        u:         src.u || base.u,
+        p:         src.p || name || base.p,
+        root:      normalizePath(src.root || base.root),
+        t:         src.t || base.t,
+        s:         asObject(src.s),
+        n:         src.n || '',
+        b:         trimList(src.b, MEMORY_LIMITS.b),
+        d:         trimList(src.d, MEMORY_LIMITS.d),
+        c:         trimList(src.c, MEMORY_LIMITS.c),
+        f:         trimList(src.f, MEMORY_LIMITS.f),
+        h:         compacted.history,
+        a:         compacted.actions,
+        e:         src.e === undefined ? null : src.e,
+        i:         src.i || '',
+        m,
+        createdAt: src.createdAt || base.createdAt,
+        lastUsed:  src.lastUsed || null,
+    };
+}
+
 function listContexts(dir) {
     ensureDir(dir);
     return fs.readdirSync(dir)
@@ -64,20 +203,12 @@ function listArchivedContexts() {
 function loadContext(dir, name) {
     const file = path.join(dir, `${name}.json`);
     if (!fs.existsSync(file)) {
-        return {
-            v: 1, u: os.userInfo().username, p: name, root: '',
-            t: 'init', s: {}, a: [], e: null, i: '',
-            createdAt: new Date().toISOString(), lastUsed: null,
-        };
+        return createDefaultContext(name);
     }
     try {
-        return JSON.parse(fs.readFileSync(file, 'utf8'));
+        return normalizeContext(JSON.parse(fs.readFileSync(file, 'utf8')), name);
     } catch {
-        return {
-            v: 1, u: os.userInfo().username, p: name, root: '',
-            t: 'init', s: {}, a: [], e: 'ctx_parse_err', i: '',
-            createdAt: null, lastUsed: null,
-        };
+        return { ...createDefaultContext(name), e: 'ctx_parse_err', createdAt: null };
     }
 }
 
@@ -90,16 +221,14 @@ function loadArchivedContext(name) {
     }
 }
 
-// Always updates lastUsed on write. Trims action history to maxActions.
+// Always updates lastUsed on write. Trims memory lists by their configured caps.
 // createdAt is preserved from ctx — set once on creation, survives every save.
 function saveContext(dir, name, ctx) {
     ensureDir(dir);
-    const config     = vscode.workspace.getConfiguration('aiContext');
-    const maxActions = config.get('maxActions') || 20;
-    const a          = Array.isArray(ctx.a) ? ctx.a.slice(-maxActions) : ctx.a;
+    const next = normalizeContext(ctx, name);
     fs.writeFileSync(
         path.join(dir, `${name}.json`),
-        JSON.stringify({ ...ctx, a, lastUsed: new Date().toISOString() })
+        JSON.stringify({ ...next, lastUsed: new Date().toISOString() })
     );
 }
 
@@ -186,18 +315,7 @@ function scanAndCreateContexts(dir, projectsRoot) {
                 while (fs.existsSync(path.join(dir, `${ctxName}.json`))) {
                     ctxName = `${entry}_${counter++}`;
                 }
-                saveContext(dir, ctxName, {
-                    v:         1,
-                    u:         os.userInfo().username,
-                    p:         entry,
-                    root:      projectPath,
-                    t:         'init',
-                    s:         {},
-                    a:         [],
-                    e:         null,
-                    i:         '',
-                    createdAt: new Date().toISOString(),
-                });
+                saveContext(dir, ctxName, createDefaultContext(entry, projectPath));
                 created.push(ctxName);
             }
         }
@@ -224,12 +342,19 @@ function formatRelativeTime(isoString) {
 }
 
 module.exports = {
+    DEFAULT_CONTEXT_VERSION,
+    DEFAULT_MAX_ACTIONS,
+    DEFAULT_MAX_HISTORY,
     getCtxDir,
     getArchiveDir,
     getWorkspaceRoot,
     getProjectsRoot,
     normalizePath,
     ensureDir,
+    createDefaultContext,
+    normalizeContext,
+    summarizeActions,
+    compactActions,
     listContexts,
     listArchivedContexts,
     loadContext,

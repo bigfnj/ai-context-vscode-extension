@@ -21,10 +21,15 @@ Rules:
 - Do NOT ask for missing context
 - Continue execution immediately
 - After your response, output the updated context on its own line prefixed EXACTLY with "CTX_UPDATE:" (no space before the JSON)
-- Only update fields that changed; preserve all others exactly
-- Context schema: {"v":int,"u":"str","p":"str","t":"str","s":{},"a":[],"e":"str|null","i":"str","m":{}}
+- CTX_UPDATE may include only changed fields; omitted fields are preserved by the extension
+- Use "n" for the next concrete action, as one short sentence
+- Use "d" for durable decisions, "c" for constraints, "f" for important files, and "b" for blockers
+- Use "h" for compacted summaries of older actions; preserve it unless you are deliberately summarizing history
+- Use "a" only for recent meaningful actions; do not log every file read or trivial step
+- Keep all arrays compact, deduplicated, and ordered from oldest to newest
+- Context schema: {"v":int,"u":"str","p":"str","root":"str","t":"str","s":{},"n":"str","b":[],"d":[],"c":[],"f":[],"h":[],"a":[],"e":"str|null","i":"str","m":{},"createdAt":"str","lastUsed":"str|null"}
 
-CTX_UPDATE:{"v":1,...}`;
+CTX_UPDATE:{"v":3,...}`;
 }
 
 // Scans from the bottom of the response for the last CTX_UPDATE: line.
