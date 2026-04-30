@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { ensureDir, normalizePath } = require('./context');
+const { ensureDir, normalizePath, getCtxDir } = require('./context');
 
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
@@ -147,12 +147,16 @@ function buildAgentContext(ctx) {
     };
 }
 
-function buildInjectionBlock(ctx) {
+function buildInjectionBlock(ctx, storePath) {
     const projected = buildAgentContext(ctx);
-    return [
+    const lines = [
         `${AGENT_CONTEXT_NAME}=${JSON.stringify(projected)}`,
         `Use ${AGENT_CONTEXT_NAME} as authoritative session state. Continue from n; preserve mem/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.`,
-    ].join('\n');
+    ];
+    if (storePath) {
+        lines.push(`Persist: write the complete updated ${AGENT_CONTEXT_NAME} JSON to ${storePath} after each session so the VS Code extension can reload state next time.`);
+    }
+    return lines.join('\n');
 }
 
 function findMarkedRange(content, startMarker, endMarker) {
@@ -309,7 +313,8 @@ function autoInject(ctx) {
     const root    = getValidContextRoot(ctx);
     if (!root) return false;
 
-    const block   = buildInjectionBlock(ctx);
+    const storePath = ctx.p ? path.join(getCtxDir(), `${ctx.p}.json`) : null;
+    const block   = buildInjectionBlock(ctx, storePath);
     const targets = getInjectionTargets(root);
 
     for (const filePath of targets) {
