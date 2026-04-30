@@ -125,10 +125,29 @@ function activate(context) {
     const dir     = getCtxDir();
     const wsState = context.workspaceState;
 
-    // ── Auto-inject on startup ────────────────────────────────────────────────
-    const activeName = getActive(wsState);
-    if (activeName) {
-        autoInject(loadContext(dir, activeName));
+    // ── Auto-detect and set context on startup ─────────────────────────────────
+    const workspaceRoot = getWorkspaceRoot();
+    const contexts      = listContexts(dir);
+
+    // Find best-match: longest root that is a prefix of workspaceRoot
+    let matchedName = null;
+    let longestRoot = 0;
+    for (const name of contexts) {
+        const ctx = loadContext(dir, name);
+        if (ctx.root && fs.existsSync(ctx.root) &&
+            workspaceRoot.startsWith(ctx.root) &&
+            ctx.root.length > longestRoot) {
+            matchedName = name;
+            longestRoot = ctx.root.length;
+        }
+    }
+
+    if (matchedName) {
+        setActive(wsState, matchedName);
+        autoInject(loadContext(dir, matchedName));
+    } else if (getActive(wsState)) {
+        // Fallback: inject whatever was previously active (legacy behavior)
+        autoInject(loadContext(dir, getActive(wsState)));
     }
 
     // ── File watcher ──────────────────────────────────────────────────────────
@@ -145,6 +164,32 @@ function activate(context) {
 
     watcher.onDidChange(onContextChange);
     watcher.onDidCreate(onContextChange);
+
+    // ── Auto-switch context when workspace folder changes ─────────────────────
+    function autoSwitchFromWorkspace() {
+        const root = getWorkspaceRoot();
+        let matched = null;
+        let longest = 0;
+
+        for (const name of listContexts(dir)) {
+            const ctx = loadContext(dir, name);
+            if (ctx.root && fs.existsSync(ctx.root) &&
+                root.startsWith(ctx.root) && ctx.root.length > longest) {
+                matched = name;
+                longest = ctx.root.length;
+            }
+        }
+
+        if (matched && matched !== getActive(wsState)) {
+            setActive(wsState, matched);
+            autoInject(loadContext(dir, matched));
+        }
+    }
+
+    // Check on startup (already done above) and whenever workspace folders change
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(autoSwitchFromWorkspace)
+    );
 
     // ── AI: Set Active Context ────────────────────────────────────────────────
     const setActiveCmd = vscode.commands.registerCommand('ai.setActiveContext', async () => {
