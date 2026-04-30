@@ -7,7 +7,7 @@ const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
 const BOOTSTRAP_START = '<!-- AI_CTX_BOOTSTRAP_START -->';
 const BOOTSTRAP_END   = '<!-- AI_CTX_BOOTSTRAP_END -->';
-const AGENT_CONTEXT_NAME = 'AI_CONTEXT_V3';
+const AGENT_CONTEXT_NAME = 'AI_CONTEXT';
 const CODEX_REPO_SCAN_MAX_DEPTH = 4;
 const CODEX_REPO_SCAN_SKIP_DIRS = new Set([
     '.git',

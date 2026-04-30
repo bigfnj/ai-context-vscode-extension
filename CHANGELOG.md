@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.9.2] - 2026-04-30
+
+### Changed
+
+- Renamed `AI_CONTEXT_V3` to `AI_CONTEXT` in all injected agent files. The `V3`
+  suffix was redundant — schema versioning is tracked by the `v` field inside the
+  JSON. Existing files are updated automatically on the next reinject.
+
+---
+
 ## [2.9.1] - 2026-04-30
 
 ### Added
