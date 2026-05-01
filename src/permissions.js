@@ -278,12 +278,102 @@ function updateCodexTomlContent(content, root, trustLevel) {
     return lines.join('\n');
 }
 
+function extractCodexTrust(content, root) {
+    if (!root || !content) return null;
+    const lines = content.split('\n');
+    const sectionHeader = `[projects."${root}"]`;
+    let inSection = false;
+    for (const line of lines) {
+        if (line.trim() === sectionHeader) { inSection = true; continue; }
+        if (inSection) {
+            if (line.trim().startsWith('[')) break;
+            const m = line.trim().match(/^trust_level\s*=\s*"(.+)"$/);
+            if (m) return m[1];
+        }
+    }
+    return null;
+}
+
 function applyCodexTrust(root, trustLevel) {
     if (!root || !trustLevel) return;
 
     const content = readCodexConfig();
     const updated = updateCodexTomlContent(content, root, trustLevel);
     writeCodexConfig(updated);
+}
+
+// ── Codex full-auto mode ──────────────────────────────────────────────────────
+
+const BASHRC_FULL_AUTO_MARKER = '# AI Context — Codex full-auto';
+const BASHRC_FULL_AUTO_END    = '# /AI Context — Codex full-auto';
+const BASHRC_FULL_AUTO_ALIAS  = "alias codex='codex --approval-mode full-auto'";
+
+function setCodexGlobalApprovalPolicy(enabled) {
+    const content = readCodexConfig();
+    const lines   = content ? content.split('\n') : [];
+
+    // Global region = everything before the first [section] header
+    let firstSection = lines.findIndex(l => l.trim().startsWith('['));
+    if (firstSection === -1) firstSection = lines.length;
+
+    let policyIdx  = -1;
+    let sandboxIdx = -1;
+    for (let i = 0; i < firstSection; i++) {
+        if (lines[i].trim().startsWith('approval_policy'))  policyIdx  = i;
+        if (lines[i].trim().startsWith('sandbox_mode'))     sandboxIdx = i;
+    }
+
+    if (enabled) {
+        if (policyIdx !== -1) {
+            lines[policyIdx] = 'approval_policy = "never"';
+        } else {
+            lines.splice(firstSection, 0, 'approval_policy = "never"');
+            firstSection++;
+        }
+        // Re-scan sandbox position after potential insert
+        sandboxIdx = -1;
+        for (let i = 0; i < firstSection; i++) {
+            if (lines[i].trim().startsWith('sandbox_mode')) sandboxIdx = i;
+        }
+        if (sandboxIdx !== -1) {
+            lines[sandboxIdx] = 'sandbox_mode = "danger-full-access"';
+        } else {
+            lines.splice(firstSection, 0, 'sandbox_mode = "danger-full-access"');
+        }
+    } else {
+        // Remove global entries (reverse order to preserve indices)
+        [policyIdx, sandboxIdx]
+            .filter(i => i !== -1)
+            .sort((a, b) => b - a)
+            .forEach(i => lines.splice(i, 1));
+    }
+
+    writeCodexConfig(lines.join('\n'));
+}
+
+function setCodexBashAlias(enabled) {
+    const bashrcPath = path.join(os.homedir(), '.bashrc');
+    let content = '';
+    try { content = fs.readFileSync(bashrcPath, 'utf-8'); } catch { return; }
+
+    const hasBlock = content.includes(BASHRC_FULL_AUTO_MARKER);
+
+    if (enabled && !hasBlock) {
+        const block = `\n${BASHRC_FULL_AUTO_MARKER}\n${BASHRC_FULL_AUTO_ALIAS}\n${BASHRC_FULL_AUTO_END}`;
+        fs.writeFileSync(bashrcPath, content + block, 'utf-8');
+    } else if (!enabled && hasBlock) {
+        const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re  = new RegExp(
+            `\\n?${esc(BASHRC_FULL_AUTO_MARKER)}\\n.*\\n${esc(BASHRC_FULL_AUTO_END)}`,
+            'g'
+        );
+        fs.writeFileSync(bashrcPath, content.replace(re, ''), 'utf-8');
+    }
+}
+
+function applyCodexFullAuto(enabled) {
+    setCodexGlobalApprovalPolicy(!!enabled);
+    setCodexBashAlias(!!enabled);
 }
 
 function consolidatePermissionsToGlobal(contexts, loadContext, saveContext) {
@@ -295,9 +385,9 @@ function consolidatePermissionsToGlobal(contexts, loadContext, saveContext) {
     for (const ctxName of contexts) {
         try {
             const ctx = loadContext(ctxName);
-            const claudePerms = (ctx.perms && ctx.perms.claude) ? ctx.perms.claude : [];
+            const allowPerms = (ctx.perms && ctx.perms.allow) ? ctx.perms.allow : [];
 
-            for (const perm of claudePerms) {
+            for (const perm of allowPerms) {
                 if (!patternFreq[perm]) {
                     patternFreq[perm] = 0;
                     patternToProjects[perm] = [];
@@ -321,10 +411,10 @@ function consolidatePermissionsToGlobal(contexts, loadContext, saveContext) {
     for (const ctxName of contexts) {
         try {
             const ctx = loadContext(ctxName);
-            const claudePerms = (ctx.perms && ctx.perms.claude) ? ctx.perms.claude : [];
-            const filtered = claudePerms.filter(p => !toPromote.includes(p));
+            const allowPerms = (ctx.perms && ctx.perms.allow) ? ctx.perms.allow : [];
+            const filtered = allowPerms.filter(p => !toPromote.includes(p));
 
-            if (filtered.length !== claudePerms.length) {
+            if (filtered.length !== allowPerms.length) {
                 saveContext(ctxName, { ...ctx, perms: { ...ctx.perms, claude: filtered } });
             }
         } catch {
@@ -345,8 +435,12 @@ module.exports = {
     captureNewClaudePerms,
     applyClaudePerms,
     updateCodexTomlContent,
+    extractCodexTrust,
     applyCodexTrust,
     consolidatePermissionsToGlobal,
+    applyCodexFullAuto,
+    setCodexGlobalApprovalPolicy,
+    setCodexBashAlias,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,

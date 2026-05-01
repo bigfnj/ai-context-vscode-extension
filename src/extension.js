@@ -1,9 +1,11 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { execSync } = require('child_process');
+const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, isClaudePermCovered, applyClaudePerms, applyCodexTrust, consolidatePermissionsToGlobal } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto } = require('./permissions');
 
 const {
     getCtxDir,
@@ -136,11 +138,13 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
     const previous = getActive(wsState);
 
     if (matched) {
-        setActive(wsState, matched);
-        bootstrapFromGit(dir, matched);
-        injectAndApplyPerms(dir, matched);
-        if (matched !== previous && options.notify !== false) {
-            notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
+        if (matched !== previous) {
+            setActive(wsState, matched);
+            bootstrapFromGit(dir, matched);
+            injectAndApplyPerms(dir, matched);
+            if (options.notify !== false) {
+                notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
+            }
         }
         return matched;
     }
@@ -241,8 +245,17 @@ function injectAndApplyPerms(dir, name) {
     const ctx = loadContext(dir, name);
     const result = autoInject(ctx);
     if (ctx.perms) {
-        applyClaudePerms(ctx.perms.claude || []);
-        applyCodexTrust(ctx.root, ctx.perms.codex || 'trusted');
+        const allow      = ctx.perms.allow || [];
+        const codexTrust = ctx.perms.codex || 'trusted';
+        applyClaudePerms(allow);
+        if (codexTrust === 'full-auto') {
+            applyCodexFullAuto(true);
+            applyCodexTrust(ctx.root, 'trusted');
+        } else {
+            applyCodexFullAuto(getCfg().get('codexFullAuto') === true);
+            const effectiveTrust = (allow.length > 0 && codexTrust !== 'untrusted') ? 'trusted' : codexTrust;
+            applyCodexTrust(ctx.root, effectiveTrust);
+        }
     }
     return result;
 }
@@ -292,14 +305,20 @@ function activate(context) {
         }
     }
 
-    // Wrap wsState so every setActive call refreshes the status bar.
+    // Wrap wsState so every setActive call refreshes the status bar and settings panel.
     const trackedWsState = {
         get:    (...a) => wsState.get(...a),
         update: async (key, value) => {
             await wsState.update(key, value);
-            if (key === ACTIVE_KEY) updateStatusBar();
+            if (key === ACTIVE_KEY) { updateStatusBar(); settingsView.refresh(); }
         },
     };
+
+    // ── Settings panel (sidebar WebviewView) ──────────────────────────────────
+    const settingsView = new SettingsViewProvider(() => getActive(trackedWsState));
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewId, settingsView)
+    );
 
     // ── Auto-detect context on startup ────────────────────────────────────────
     if (getCfg().get('autoDetect') !== false) {
@@ -334,11 +353,21 @@ function activate(context) {
             return;
         }
 
+        // Shell PROMPT_COMMAND writes $PWD here on every prompt for zero-friction switching.
+        if (basename === '.cwd') {
+            try {
+                const cwd = fs.existsSync(uri.fsPath) ? fs.readFileSync(uri.fsPath, 'utf8').trim() : null;
+                if (cwd) syncActiveContextForPath(dir, trackedWsState, cwd);
+            } catch { /* ignore */ }
+            return;
+        }
+
         if (!basename.endsWith('.json')) return;
         const changedName = path.basename(uri.fsPath, '.json');
         if (changedName === getActive(trackedWsState)) {
             injectAndApplyPerms(dir, changedName);
         }
+        settingsView.refresh();
     };
 
     watcher.onDidChange(onContextChange);
@@ -405,14 +434,15 @@ function activate(context) {
             const arr  = (key, fb) => { const v = cfg.get(key); return Array.isArray(v) && v.length ? v : fb; };
 
             const agents       = arr('agents', ['claude', 'codex', 'copilot']);
-            const autoDetect   = cfg.get('autoDetect') !== false;
-            const followEditor = cfg.get('followActiveEditor') !== false;
-            const followTerm   = cfg.get('followTerminalCwd') !== false;
-            const bootstrap    = cfg.get('codexProjectSwitchBootstrap') !== false;
-            const scanOnLaunch = cfg.get('scanOnLaunch') !== false;
-            const showNotif    = cfg.get('showNotifications') !== false;
-            const autoGit      = cfg.get('autoGitignore') === true;
-            const maxAct       = num('maxActions', 40);
+            const autoDetect    = cfg.get('autoDetect') !== false;
+            const followEditor  = cfg.get('followActiveEditor') !== false;
+            const followTerm    = cfg.get('followTerminalCwd') !== false;
+            const bootstrap     = cfg.get('codexProjectSwitchBootstrap') !== false;
+            const scanOnLaunch  = cfg.get('scanOnLaunch') !== false;
+            const showNotif     = cfg.get('showNotifications') !== false;
+            const autoGit       = cfg.get('autoGitignore') === true;
+            const codexFullAuto = cfg.get('codexFullAuto') === true;
+            const maxAct        = num('maxActions', 40);
 
             const items = [
                 {
@@ -490,6 +520,13 @@ function activate(context) {
                     _type:       'boolean',
                 },
                 {
+                    label:       `$(zap)  Codex Full-Auto   ${codexFullAuto ? '$(check)' : '$(circle-slash)'}`,
+                    description: codexFullAuto ? 'on' : 'off',
+                    detail:      'Every codex session runs --approval-mode full-auto — alias in ~/.bashrc + approval_policy in ~/.codex/config.toml',
+                    _key:        'codexFullAuto',
+                    _type:       'boolean',
+                },
+                {
                     label:       '$(database)  Context Store',
                     description: str('contextDir', '~/.ai-context  (default)'),
                     detail:      'Directory where context JSON files are stored',
@@ -538,7 +575,10 @@ function activate(context) {
 
             // ── Toggle boolean ──────────────────────────────────────────────
             if (pick._type === 'boolean') {
-                const current = cfg.get(pick._key) !== false;
+                const DEFAULT_OFF_KEYS = ['autoGitignore', 'codexFullAuto'];
+                const current = DEFAULT_OFF_KEYS.includes(pick._key)
+                    ? cfg.get(pick._key) === true
+                    : cfg.get(pick._key) !== false;
                 await cfg.update(pick._key, !current, vscode.ConfigurationTarget.Global);
 
             // ── Multi-select (agents) ───────────────────────────────────────
@@ -661,17 +701,17 @@ function activate(context) {
                     // Capture new permissions granted during task
                     const afterSettings = readClaudeSettings();
                     const afterAllow = (afterSettings.permissions && afterSettings.permissions.allow) ? afterSettings.permissions.allow : [];
-                    const newPerms = captureNewClaudePerms(beforeAllow, afterAllow, ctx.root, ctx.perms && ctx.perms.claude ? ctx.perms.claude : []);
+                    const newPerms = captureNewClaudePerms(beforeAllow, afterAllow, ctx.root, ctx.perms && ctx.perms.allow ? ctx.perms.allow : []);
 
                     if (newPerms.length > 0) {
                         const savedCtx = loadContext(dir, ctxName);
-                        const merged = [...(savedCtx.perms && savedCtx.perms.claude ? savedCtx.perms.claude : [])];
+                        const merged = [...(savedCtx.perms && savedCtx.perms.allow ? savedCtx.perms.allow : [])];
                         for (const p of newPerms) {
                             if (!isClaudePermCovered(p, merged)) {
                                 merged.push(p);
                             }
                         }
-                        saveContext(dir, ctxName, { ...savedCtx, perms: { ...savedCtx.perms, claude: merged } });
+                        saveContext(dir, ctxName, { ...savedCtx, perms: { ...savedCtx.perms, allow: merged } });
                     }
                 } else {
                     vscode.window.showWarningMessage('Response received but no CTX_UPDATE found — context unchanged');
@@ -725,7 +765,7 @@ function activate(context) {
 
         while (true) {
             const ctx = loadContext(dir, ctxName);
-            const claudePerms = (ctx.perms && ctx.perms.claude) ? ctx.perms.claude : [];
+            const claudePerms = (ctx.perms && ctx.perms.allow) ? ctx.perms.allow : [];
             const codexTrust  = (ctx.perms && ctx.perms.codex)  ? ctx.perms.codex  : 'trusted';
 
             const items = [
@@ -761,13 +801,13 @@ function activate(context) {
                 );
                 if (confirm === 'Remove') {
                     const fresh = loadContext(dir, ctxName);
-                    const updated = (fresh.perms && fresh.perms.claude || []).filter(p => p !== pick._perm);
-                    saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, claude: updated } });
+                    const updated = (fresh.perms && fresh.perms.allow || []).filter(p => p !== pick._perm);
+                    saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, allow: updated } });
                 }
             }
 
             if (pick._type === 'codex') {
-                const trustOptions = ['untrusted', 'low', 'medium', 'high', 'trusted'].map(t => ({
+                const trustOptions = ['full-auto', 'trusted', 'auto', 'untrusted'].map(t => ({
                     label: t,
                     description: t === codexTrust ? '● current' : '',
                 }));
@@ -991,9 +1031,63 @@ function activate(context) {
         );
     }
 
+    // ── Codex full-auto: apply on startup and whenever the setting changes ──
+    applyCodexFullAuto(getCfg().get('codexFullAuto') === true);
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('aiContext.codexFullAuto')) {
+                applyCodexFullAuto(getCfg().get('codexFullAuto') === true);
+            }
+        })
+    );
+
+    // ── Watch Claude settings.json — capture any new approved permissions ────
+    const claudeDir  = path.join(os.homedir(), '.claude');
+    const claudeWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(claudeDir), 'settings.json')
+    );
+    const syncClaudePerms = () => {
+        const active = getActive(trackedWsState);
+        if (!active) return;
+        const currentAllow = readClaudeSettings().permissions?.allow || [];
+        const ctx          = loadContext(dir, active);
+        const stored       = ctx.perms?.allow || [];
+        const uncovered    = currentAllow.filter(p => !isClaudePermCovered(p, stored));
+        if (uncovered.length === 0) return;
+        const newPerms = [];
+        for (const raw of uncovered) {
+            const g = generalizeClaudePerm(raw, ctx.root);
+            if (!isClaudePermCovered(g, [...stored, ...newPerms])) newPerms.push(g);
+        }
+        if (newPerms.length === 0) return;
+        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...newPerms] } });
+        settingsView.refresh();
+        notify(`AI Context: captured ${newPerms.length} new permission${newPerms.length !== 1 ? 's' : ''} for [${active}]`);
+    };
+    claudeWatcher.onDidChange(syncClaudePerms);
+    claudeWatcher.onDidCreate(syncClaudePerms);
+
+    // ── Watch Codex config.toml — sync trust level changes back to context ──
+    const codexDir = path.join(os.homedir(), '.codex');
+    const codexWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(codexDir), 'config.toml')
+    );
+    const syncCodexTrust = () => {
+        const active = getActive(trackedWsState);
+        if (!active) return;
+        const ctx   = loadContext(dir, active);
+        if (!ctx.root) return;
+        const level = extractCodexTrust(readCodexConfig(), normalizePath(ctx.root));
+        if (!level || level === (ctx.perms?.codex || 'trusted')) return;
+        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, codex: level } });
+        settingsView.refresh();
+    };
+    codexWatcher.onDidChange(syncCodexTrust);
+    codexWatcher.onDidCreate(syncCodexTrust);
+
     context.subscriptions.push(
         configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
-        deleteCtx, cleanUp, restoreCtx, reinjectCmd, watcher
+        deleteCtx, cleanUp, restoreCtx, reinjectCmd, watcher, claudeWatcher, codexWatcher
     );
 }
 

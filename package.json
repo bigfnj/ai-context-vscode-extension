@@ -2,7 +2,7 @@
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
   "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
-  "version": "2.9.2",
+  "version": "3.0.0",
   "publisher": "local",
   "scripts": {
     "test": "node test/run-unit.js"
@@ -19,6 +19,24 @@
   ],
   "main": "./src/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ai-context",
+          "title": "AI Context",
+          "icon": "assets/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ai-context": [
+        {
+          "type": "webview",
+          "id": "aiContext.settingsView",
+          "name": "AI Context Runner"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "ai.runTask",
@@ -139,6 +157,11 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically add injected AI files (CLAUDE.md, AGENTS.md, etc.) to the project's .gitignore."
+        },
+        "aiContext.codexFullAuto": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-set Codex to full-auto approval mode every session. Writes alias codex='codex --approval-mode full-auto' to ~/.bashrc and sets approval_policy=never + sandbox_mode=danger-full-access globally in ~/.codex/config.toml."
         },
         "aiContext.contextDir": {
           "type": "string",
