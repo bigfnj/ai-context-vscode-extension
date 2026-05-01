@@ -375,11 +375,24 @@ function activate(context) {
             return;
         }
 
-        // Shell PROMPT_COMMAND writes $PWD here on every prompt for zero-friction switching.
+        // Shell PROMPT_COMMAND / Codex bootstrap writes $PWD here for zero-friction switching.
         if (basename === '.cwd') {
             try {
                 const cwd = fs.existsSync(uri.fsPath) ? fs.readFileSync(uri.fsPath, 'utf8').trim() : null;
-                if (cwd) syncActiveContextForPath(dir, trackedWsState, cwd);
+                if (!cwd) return;
+                const matched = syncActiveContextForPath(dir, trackedWsState, cwd);
+                if (!matched) {
+                    // No context exists for this path — if it's under projectsRoot, auto-create and retry.
+                    const projectsRoot = getProjectsRoot();
+                    if (isSameOrChildPath(projectsRoot, cwd)) {
+                        const created = scanAndCreateContexts(dir, projectsRoot);
+                        if (created.length > 0) {
+                            notify(`AI Context: new project${created.length !== 1 ? 's' : ''} found — ${created.join(', ')}`);
+                            settingsView.refresh();
+                            syncActiveContextForPath(dir, trackedWsState, cwd);
+                        }
+                    }
+                }
             } catch { /* ignore */ }
             return;
         }
