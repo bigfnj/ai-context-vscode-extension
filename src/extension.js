@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSafeCommands, deriveSafeCommandsFromAllow } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow } = require('./permissions');
 
 const {
     getCtxDir,
@@ -253,8 +253,10 @@ function injectAndApplyPerms(dir, name) {
         const allow        = ctx.perms.allow || [];
         const codexTrust   = ctx.perms.codex || 'trusted';
         const safeCommands = ctx.perms.safeCommands || [];
+        const sandboxMode  = ctx.perms.sandboxMode === true;
         applyClaudePerms(allow);
         applyCodexSafeCommands([...safeCommands, ...deriveSafeCommandsFromAllow(allow)]);
+        applyCodexSandboxMode(ctx.root, sandboxMode);
         if (codexTrust === 'full-auto') {
             applyCodexFullAuto(true);
             applyCodexTrust(ctx.root, 'trusted');
@@ -804,6 +806,7 @@ function activate(context) {
             const ctx = loadContext(dir, ctxName);
             const claudePerms = (ctx.perms && ctx.perms.allow) ? ctx.perms.allow : [];
             const codexTrust  = (ctx.perms && ctx.perms.codex)  ? ctx.perms.codex  : 'trusted';
+            const sandboxMode = ctx.perms && ctx.perms.sandboxMode === true;
 
             const items = [
                 ...claudePerms.map(p => ({
@@ -813,9 +816,16 @@ function activate(context) {
                     _perm:       p,
                 })),
                 {
-                    label:       `$(shield)  Codex trust: ${codexTrust}`,
-                    description: 'click to change',
-                    _type:       'codex',
+                    label:       `$(zap)  Codex Sandbox Mode: ${sandboxMode ? '$(check) enabled' : '$(circle-slash) disabled'}`,
+                    description: sandboxMode ? 'danger-full-access — click to disable' : 'click to enable',
+                    _type:       'sandbox',
+                },
+                {
+                    label:       sandboxMode
+                        ? `$(shield)  Codex trust: ${codexTrust}  (inactive — sandbox mode on)`
+                        : `$(shield)  Codex trust: ${codexTrust}`,
+                    description: sandboxMode ? '' : 'click to change',
+                    _type:       sandboxMode ? 'noop' : 'codex',
                 },
                 {
                     label:       '$(close)  Close',
@@ -824,11 +834,15 @@ function activate(context) {
             ];
 
             const pick = await vscode.window.showQuickPick(items, {
-                placeHolder: `[${ctxName}] — ${claudePerms.length} Claude permission(s) · Codex: ${codexTrust}`,
+                placeHolder: `[${ctxName}] — ${claudePerms.length} Claude perm(s) · Codex: ${codexTrust}${sandboxMode ? ' · sandbox ON' : ''}`,
                 matchOnDescription: true,
             });
 
             if (!pick || pick._type === 'close') return;
+
+            if (pick._type === 'noop') {
+                continue;
+            }
 
             if (pick._type === 'claude') {
                 const confirm = await vscode.window.showWarningMessage(
@@ -841,6 +855,24 @@ function activate(context) {
                     const updated = (fresh.perms && fresh.perms.allow || []).filter(p => p !== pick._perm);
                     saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, allow: updated } });
                 }
+            }
+
+            if (pick._type === 'sandbox') {
+                const current = loadContext(dir, ctxName);
+                const enabling = !(current.perms && current.perms.sandboxMode === true);
+                if (enabling) {
+                    const confirm = await vscode.window.showWarningMessage(
+                        `Enable Codex sandbox bypass (danger-full-access) for [${ctxName}]?\n\nThis writes sandbox_mode = "danger-full-access" to the project's .codex/config.toml. Use only in authorized environments.`,
+                        { modal: true },
+                        'Enable'
+                    );
+                    if (confirm !== 'Enable') continue;
+                }
+                saveContext(dir, ctxName, {
+                    ...current,
+                    perms: { ...current.perms, sandboxMode: enabling },
+                });
+                applyCodexSandboxMode(current.root, enabling);
             }
 
             if (pick._type === 'codex') {

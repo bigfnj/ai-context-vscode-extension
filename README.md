@@ -80,6 +80,21 @@ and Codex so you are not re-prompted for already-approved commands in new sessio
    Permissions appearing in 2+ projects are promoted to your global Claude allowlist
    and removed from individual project contexts.
 
+### Codex sandbox mode
+
+Per-project toggle in the sidebar (Codex Settings section) that enables Codex's
+`danger-full-access` sandbox bypass. When enabled:
+
+- Writes `sandbox_mode = "danger-full-access"` to the project's `.codex/config.toml`
+- Codex gains unrestricted file and command access for that project
+- Useful for authorized testing, pen testing, or environments where sandbox restrictions
+  are not needed
+- Confirmation modal warns before enabling
+
+This uses the **official Codex configuration mechanism** (not an exploit) and respects
+admin-enforced `requirements.toml` restrictions. Sandbox Mode is per-project and does
+not affect other projects or global Codex settings.
+
 ### Codex trust level
 
 Codex uses a project-level trust model rather than a per-command allow list. The
@@ -91,6 +106,9 @@ trust dropdown in the sidebar supports:
 | `trusted` | Sets `trust_level = "trusted"` for this project in `~/.codex/config.toml`. |
 | `auto` | Codex uses its own heuristic. |
 | `untrusted` | Sets `trust_level = "untrusted"`. Codex prompts for every action. |
+
+When Sandbox Mode is enabled, the Trust Level setting is inactive (greyed out) since
+sandbox bypass supersedes trust-based restrictions.
 
 Setting `full-auto` on a project activates it globally (not just for that project),
 since Codex's full-auto mode is a session-level flag. The `aiContext.codexFullAuto`

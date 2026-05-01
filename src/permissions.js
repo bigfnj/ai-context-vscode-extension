@@ -486,6 +486,38 @@ function setCodexBashAlias(enabled) {
     }
 }
 
+function applyCodexSandboxMode(projectRoot, enabled) {
+    if (!projectRoot) return;
+    const configDir  = path.join(projectRoot, '.codex');
+    const configPath = path.join(configDir, 'config.toml');
+
+    if (!fs.existsSync(configDir)) {
+        if (!enabled) return;
+        fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    const content = fs.existsSync(configPath)
+        ? fs.readFileSync(configPath, 'utf-8') : '';
+
+    const lines   = content.split('\n');
+    const keyLine = /^sandbox_mode\s*=/;
+    const idx     = lines.findIndex(l => keyLine.test(l));
+
+    let updated;
+    if (enabled) {
+        const newLine = 'sandbox_mode = "danger-full-access"';
+        updated = idx >= 0
+            ? [...lines.slice(0, idx), newLine, ...lines.slice(idx + 1)]
+            : [newLine, ...lines];
+    } else {
+        updated = idx >= 0
+            ? lines.filter((_, i) => i !== idx)
+            : lines;
+    }
+
+    fs.writeFileSync(configPath, updated.join('\n'), 'utf-8');
+}
+
 function applyCodexFullAuto(enabled) {
     setCodexGlobalApprovalPolicy(!!enabled);
     setCodexBashAlias(!!enabled);
@@ -554,6 +586,7 @@ module.exports = {
     applyCodexTrust,
     consolidatePermissionsToGlobal,
     applyCodexFullAuto,
+    applyCodexSandboxMode,
     setCodexGlobalApprovalPolicy,
     setCodexBashAlias,
     updateCodexGranularConfig,

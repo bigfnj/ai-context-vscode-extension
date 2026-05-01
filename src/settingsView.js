@@ -51,13 +51,14 @@ class SettingsViewProvider {
             return { name, root: ctx.root || '', lastUsed: ctx.lastUsed || null };
         });
 
-        let perms = { allow: [], codex: 'trusted', safeCommands: [] };
+        let perms = { allow: [], codex: 'trusted', safeCommands: [], sandboxMode: false };
         if (active) {
             const ctx = loadContext(dir, active);
             if (ctx.perms) {
                 perms.allow        = Array.isArray(ctx.perms.allow) ? ctx.perms.allow : [];
                 perms.codex        = typeof ctx.perms.codex === 'string' ? ctx.perms.codex : 'trusted';
                 perms.safeCommands = Array.isArray(ctx.perms.safeCommands) ? ctx.perms.safeCommands : [];
+                perms.sandboxMode  = ctx.perms.sandboxMode === true;
             }
         }
 
@@ -152,6 +153,30 @@ class SettingsViewProvider {
                 this.refresh();
                 break;
             }
+            case 'setCodexSandbox': {
+                if (!active) break;
+                const { applyCodexSandboxMode } = require('./permissions');
+                const ctx = loadContext(dir, active);
+                const enabling = msg.enabled === true;
+                if (enabling) {
+                    const confirmed = await vscode.window.showWarningMessage(
+                        `Enable Codex sandbox bypass (danger-full-access) for [${active}]?\n\nThis writes sandbox_mode = "danger-full-access" to the project's .codex/config.toml. Use only in authorized environments.`,
+                        { modal: true },
+                        'Enable'
+                    );
+                    if (confirmed !== 'Enable') {
+                        this.refresh();
+                        break;
+                    }
+                }
+                saveContext(dir, active, {
+                    ...ctx,
+                    perms: { ...ctx.perms, sandboxMode: enabling },
+                });
+                applyCodexSandboxMode(ctx.root, enabling);
+                this.refresh();
+                break;
+            }
             case 'switchToPrev': {
                 if (this._actions.switchToPrev) await this._actions.switchToPrev();
                 break;
@@ -221,10 +246,21 @@ input:checked+.slider::before{transform:translateX(12px);opacity:1}
 .safe-add-row{display:flex;gap:6px;margin:4px 0 2px}
 .safe-input{flex:1;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:3px;padding:3px 6px;font-size:11px;font-family:var(--vscode-editor-font-family,monospace)}
 .safe-input:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
-.codex-trust{display:flex;align-items:center;gap:8px;margin-top:4px}
-.codex-trust label{font-size:12px;font-weight:500;white-space:nowrap}
+.sandbox-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
+.sandbox-info{flex:1}
+.sandbox-label{font-size:12px;font-weight:500;margin-bottom:2px}
+.sandbox-status{font-size:12px;color:var(--vscode-textLink-foreground,#4fc3f7);font-weight:500}
+.sandbox-desc{font-size:10px;color:var(--vscode-descriptionForeground);margin-top:1px}
+.sandbox-toggle .toggle{margin-top:0;flex-shrink:0}
+.codex-trust-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
+.codex-trust-row:last-child{border-bottom:none}
+.trust-label{font-size:12px;font-weight:500;white-space:nowrap;margin-right:8px}
+.codex-trust-row select{flex:1}
+.codex-trust-row select.disabled{opacity:.5;cursor:not-allowed}
+.inactive{font-size:10px;color:var(--vscode-descriptionForeground);font-weight:normal;margin-left:4px;display:block;margin-top:2px}
 select{background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:3px;padding:3px 6px;font-size:12px;font-family:var(--vscode-font-family);cursor:pointer;flex:1}
 select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
+select:disabled{opacity:.5;cursor:not-allowed}
 /* Previous context card */
 .prev-card{border:1px dashed var(--vscode-widget-border,rgba(255,255,255,.1));border-radius:4px;padding:8px 12px;margin-top:6px;opacity:.7}
 .prev-label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--vscode-descriptionForeground);margin-bottom:3px}
@@ -273,6 +309,7 @@ function render() {
     const claudePerms  = perms.allow || [];
     const codexTrust   = perms.codex  || 'trusted';
     const safeCommands = perms.safeCommands || [];
+    const sandboxMode  = perms.sandboxMode === true;
 
     const prevCard = previous ? \`
         <div class="prev-card">
@@ -303,15 +340,29 @@ function render() {
                 onkeydown="if(event.key==='Enter')addSafeCmd()">
             <button class="sec" onclick="addSafeCmd()">+</button>
         </div>
-        <div class="perm-subsec">Codex — Trust Level</div>
-        <div class="codex-trust">
-            <label>Trust:</label>
-            <select onchange="setCodexTrust(this.value)">
+        <button class="sec full" onclick="send('managePermissions')">Advanced Permissions…</button>
+    \` : '<div class="perm-empty">No active context</div>';
+
+    const codexBody = active ? \`
+        <div class="sandbox-toggle">
+            <div class="sandbox-info">
+                <div class="sandbox-label">Sandbox Mode</div>
+                <div class="sandbox-status">\${sandboxMode ? '✓ enabled' : '○ disabled'}</div>
+                <div class="sandbox-desc">\${sandboxMode ? 'danger-full-access' : 'standard sandbox'}</div>
+            </div>
+            <label class="toggle">
+                <input type="checkbox" \${sandboxMode ? 'checked' : ''}
+                    onchange="send('setCodexSandbox', {enabled: this.checked})">
+                <span class="slider"></span>
+            </label>
+        </div>
+        <div class="codex-trust-row">
+            <div class="trust-label">Trust Level \${sandboxMode ? '<span class="inactive">(inactive — sandbox mode on)</span>' : ''}</div>
+            <select onchange="setCodexTrust(this.value)" \${sandboxMode ? 'disabled' : ''} class="\${sandboxMode ? 'disabled' : ''}">
                 \${TRUST_LEVELS.map(l => \`<option value="\${l}" \${l===codexTrust?'selected':''}>\${l}</option>\`).join('')}
             </select>
         </div>
-        <button class="sec full" onclick="send('managePermissions')">Advanced Permissions…</button>
-    \` : '<div class="perm-empty">No active context</div>';
+    \` : '';
 
     document.getElementById('root').innerHTML =
         section('active', 'Active Context', true,
@@ -337,6 +388,7 @@ function render() {
             \`<button class="sec full" onclick="send('newContext')">+ New Context</button>\`
         ) +
         section('permissions', \`Permissions\${active ? ' — ' + esc(active) : ''}\`, true, permsBody) +
+        section('codex', 'Codex Settings', true, codexBody) +
         section('behaviour', 'Behaviour', true,
             TOGGLES.map(t => \`
                 <div class="tog-row">
@@ -404,8 +456,12 @@ function setCodexTrust(level) {
     vscode.postMessage({ type: 'setCodexTrust', level });
 }
 
+function setCodexSandbox(data) {
+    vscode.postMessage({ type: 'setCodexSandbox', ...data });
+}
+
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function send(type){ vscode.postMessage({type}); }
+function send(type, data){ vscode.postMessage({type, ...data}); }
 function sendToggle(key,value){ vscode.postMessage({type:'toggleSetting',key,value}); }
 function sendAgent(agent,enabled){ vscode.postMessage({type:'toggleAgent',agent,enabled}); }
 

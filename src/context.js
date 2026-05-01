@@ -147,7 +147,7 @@ function createDefaultContext(name, root = '') {
         m:         { compactedAt: null, compactionVersion: COMPACTION_VERSION },
         createdAt: new Date().toISOString(),
         lastUsed:  null,
-        perms:     { allow: [], codex: 'trusted', safeCommands: [] },
+        perms:     { allow: [], codex: 'trusted', safeCommands: [], sandboxMode: false },
     };
 }
 
@@ -169,6 +169,7 @@ function normalizeContext(ctx, name) {
         allow:        Array.isArray(rawAllow) ? rawAllow.filter(p => typeof p === 'string' && p.trim()) : [],
         codex:        typeof srcPerms.codex === 'string' && srcPerms.codex.trim() ? srcPerms.codex.trim() : 'trusted',
         safeCommands: Array.isArray(srcPerms.safeCommands) ? srcPerms.safeCommands.filter(s => typeof s === 'string' && s.trim()) : [],
+        sandboxMode:  srcPerms.sandboxMode === true,
     };
     return {
         ...base,
