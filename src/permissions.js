@@ -308,29 +308,30 @@ const BASHRC_FULL_AUTO_MARKER = '# AI Context — Codex full-auto';
 const BASHRC_FULL_AUTO_END    = '# /AI Context — Codex full-auto';
 const BASHRC_FULL_AUTO_ALIAS  = "alias codex='codex --approval-mode full-auto'";
 
+function globalRegion(lines) {
+    const idx = lines.findIndex(l => l.trim().startsWith('['));
+    return idx === -1 ? lines.length : idx;
+}
+
 function setCodexGlobalApprovalPolicy(enabled) {
-    const content = readCodexConfig();
-    const lines   = content ? content.split('\n') : [];
+    let content = readCodexConfig();
+    const lines = content ? content.split('\n') : [];
 
-    // Global region = everything before the first [section] header
-    let firstSection = lines.findIndex(l => l.trim().startsWith('['));
-    if (firstSection === -1) firstSection = lines.length;
-
+    let firstSection = globalRegion(lines);
     let policyIdx  = -1;
     let sandboxIdx = -1;
     for (let i = 0; i < firstSection; i++) {
-        if (lines[i].trim().startsWith('approval_policy'))  policyIdx  = i;
-        if (lines[i].trim().startsWith('sandbox_mode'))     sandboxIdx = i;
+        if (lines[i].trim().startsWith('approval_policy')) policyIdx  = i;
+        if (lines[i].trim().startsWith('sandbox_mode'))    sandboxIdx = i;
     }
 
     if (enabled) {
         if (policyIdx !== -1) {
-            lines[policyIdx] = 'approval_policy = "never"';
+            lines[policyIdx] = 'approval_policy = "granular"';
         } else {
-            lines.splice(firstSection, 0, 'approval_policy = "never"');
+            lines.splice(firstSection, 0, 'approval_policy = "granular"');
             firstSection++;
         }
-        // Re-scan sandbox position after potential insert
         sandboxIdx = -1;
         for (let i = 0; i < firstSection; i++) {
             if (lines[i].trim().startsWith('sandbox_mode')) sandboxIdx = i;
@@ -340,15 +341,86 @@ function setCodexGlobalApprovalPolicy(enabled) {
         } else {
             lines.splice(firstSection, 0, 'sandbox_mode = "danger-full-access"');
         }
+        writeCodexConfig(updateCodexGranularConfig(lines.join('\n'), { sandbox_approval: false, mcp_elicitations: false }));
     } else {
-        // Remove global entries (reverse order to preserve indices)
         [policyIdx, sandboxIdx]
             .filter(i => i !== -1)
             .sort((a, b) => b - a)
             .forEach(i => lines.splice(i, 1));
+        writeCodexConfig(lines.join('\n'));
+    }
+}
+
+function updateCodexGranularConfig(content, config) {
+    const lines  = content ? content.split('\n') : [];
+    const header = '[approval_policy_granular_config]';
+
+    let sectionIdx = -1;
+    let sectionEnd = lines.length;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === header) {
+            sectionIdx = i;
+            for (let j = i + 1; j < lines.length; j++) {
+                if (lines[j].trim().startsWith('[')) { sectionEnd = j; break; }
+            }
+            break;
+        }
     }
 
+    const configLines = Object.entries(config).map(([k, v]) => `${k} = ${v}`);
+
+    if (sectionIdx !== -1) {
+        lines.splice(sectionIdx + 1, sectionEnd - sectionIdx - 1, ...configLines);
+    } else {
+        const firstProject = lines.findIndex(l => l.trim().startsWith('[projects.'));
+        const insertAt = firstProject !== -1 ? firstProject : lines.length;
+        lines.splice(insertAt, 0, '', header, ...configLines, '');
+    }
+
+    return lines.join('\n');
+}
+
+// ── Codex safeCommands ────────────────────────────────────────────────────────
+
+function extractCodexSafeCommands(content) {
+    if (!content) return [];
+    const lines = content.split('\n');
+    for (const line of lines) {
+        if (line.trim().startsWith('[')) break;
+        const m = line.match(/^safeCommands\s*=\s*\[([^\]]*)\]/);
+        if (m) {
+            return m[1].split(',')
+                .map(s => s.trim().replace(/^["']|["']$/g, ''))
+                .filter(Boolean);
+        }
+    }
+    return [];
+}
+
+function setCodexSafeCommands(commands) {
+    const content = readCodexConfig();
+    const lines   = content ? content.split('\n') : [];
+    let firstSection = globalRegion(lines);
+
+    let existingIdx = -1;
+    for (let i = 0; i < firstSection; i++) {
+        if (lines[i].trim().startsWith('safeCommands')) { existingIdx = i; break; }
+    }
+
+    const value = `safeCommands = [${commands.map(c => `"${c.replace(/"/g, '\\"')}"`).join(', ')}]`;
+    if (existingIdx !== -1) {
+        lines[existingIdx] = value;
+    } else {
+        lines.splice(firstSection, 0, value);
+    }
     writeCodexConfig(lines.join('\n'));
+}
+
+function applyCodexSafeCommands(storedCommands) {
+    if (!Array.isArray(storedCommands) || storedCommands.length === 0) return;
+    const existing = extractCodexSafeCommands(readCodexConfig());
+    const merged   = [...new Set([...existing, ...storedCommands])];
+    if (merged.length !== existing.length) setCodexSafeCommands(merged);
 }
 
 function setCodexBashAlias(enabled) {
@@ -441,6 +513,10 @@ module.exports = {
     applyCodexFullAuto,
     setCodexGlobalApprovalPolicy,
     setCodexBashAlias,
+    updateCodexGranularConfig,
+    extractCodexSafeCommands,
+    setCodexSafeCommands,
+    applyCodexSafeCommands,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,

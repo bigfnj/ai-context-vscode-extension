@@ -51,12 +51,13 @@ class SettingsViewProvider {
             return { name, root: ctx.root || '', lastUsed: ctx.lastUsed || null };
         });
 
-        let perms = { allow: [], codex: 'trusted' };
+        let perms = { allow: [], codex: 'trusted', safeCommands: [] };
         if (active) {
             const ctx = loadContext(dir, active);
             if (ctx.perms) {
-                perms.allow = Array.isArray(ctx.perms.allow) ? ctx.perms.allow : [];
-                perms.codex  = typeof ctx.perms.codex === 'string' ? ctx.perms.codex : 'trusted';
+                perms.allow        = Array.isArray(ctx.perms.allow) ? ctx.perms.allow : [];
+                perms.codex        = typeof ctx.perms.codex === 'string' ? ctx.perms.codex : 'trusted';
+                perms.safeCommands = Array.isArray(ctx.perms.safeCommands) ? ctx.perms.safeCommands : [];
             }
         }
 
@@ -112,7 +113,31 @@ class SettingsViewProvider {
                 const perms = Array.isArray(ctx.perms?.allow) ? ctx.perms.allow : [];
                 saveContext(dir, active, {
                     ...ctx,
-                    perms: { ...ctx.perms, claude: perms.filter(p => p !== msg.perm) },
+                    perms: { ...ctx.perms, allow: perms.filter(p => p !== msg.perm) },
+                });
+                this.refresh();
+                break;
+            }
+            case 'addSafeCommand': {
+                if (!active || !msg.cmd || !msg.cmd.trim()) break;
+                const ctx = loadContext(dir, active);
+                const existing = Array.isArray(ctx.perms?.safeCommands) ? ctx.perms.safeCommands : [];
+                if (!existing.includes(msg.cmd.trim())) {
+                    saveContext(dir, active, {
+                        ...ctx,
+                        perms: { ...ctx.perms, safeCommands: [...existing, msg.cmd.trim()] },
+                    });
+                }
+                this.refresh();
+                break;
+            }
+            case 'removeSafeCommand': {
+                if (!active) break;
+                const ctx = loadContext(dir, active);
+                const existing = Array.isArray(ctx.perms?.safeCommands) ? ctx.perms.safeCommands : [];
+                saveContext(dir, active, {
+                    ...ctx,
+                    perms: { ...ctx.perms, safeCommands: existing.filter(c => c !== msg.cmd) },
                 });
                 this.refresh();
                 break;
@@ -193,6 +218,9 @@ input:checked+.slider::before{transform:translateX(12px);opacity:1}
 .perm-rm{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;border-radius:2px}
 .perm-rm:hover{color:var(--vscode-errorForeground,#f48771);background:transparent}
 .perm-empty{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;padding:4px 0}
+.safe-add-row{display:flex;gap:6px;margin:4px 0 2px}
+.safe-input{flex:1;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:3px;padding:3px 6px;font-size:11px;font-family:var(--vscode-editor-font-family,monospace)}
+.safe-input:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
 .codex-trust{display:flex;align-items:center;gap:8px;margin-top:4px}
 .codex-trust label{font-size:12px;font-weight:500;white-space:nowrap}
 select{background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:3px;padding:3px 6px;font-size:12px;font-family:var(--vscode-font-family);cursor:pointer;flex:1}
@@ -212,7 +240,7 @@ select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted' }, version: '' };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, version: '' };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -242,8 +270,9 @@ function render() {
     const { active, previous, contexts, settings, perms, version } = S;
     const activeCtx   = contexts.find(c => c.name === active);
     const agents      = settings.agents || ['claude','codex','copilot'];
-    const claudePerms = perms.allow || [];
-    const codexTrust  = perms.codex  || 'trusted';
+    const claudePerms  = perms.allow || [];
+    const codexTrust   = perms.codex  || 'trusted';
+    const safeCommands = perms.safeCommands || [];
 
     const prevCard = previous ? \`
         <div class="prev-card">
@@ -261,8 +290,19 @@ function render() {
                     <span class="perm-txt">\${esc(p)}</span>
                     <button class="perm-rm" title="Remove" onclick="removePerm(\${i})">×</button>
                 </div>\`).join('')
-            : '<div class="perm-empty">No Claude permissions captured yet</div>'
+            : '<div class="perm-empty">No permissions captured yet</div>'
         }
+        <div class="perm-subsec">Codex — Safe Commands (\${safeCommands.length})</div>
+        \${safeCommands.map((c,i) => \`
+            <div class="perm-item">
+                <span class="perm-txt">\${esc(c)}</span>
+                <button class="perm-rm" title="Remove" onclick="removeSafeCmd(\${i})">×</button>
+            </div>\`).join('')}
+        <div class="safe-add-row">
+            <input id="safe-input" class="safe-input" type="text" placeholder="prefix e.g. du -sh"
+                onkeydown="if(event.key==='Enter')addSafeCmd()">
+            <button class="sec" onclick="addSafeCmd()">+</button>
+        </div>
         <div class="perm-subsec">Codex — Trust Level</div>
         <div class="codex-trust">
             <label>Trust:</label>
@@ -348,6 +388,16 @@ function tog(id) {
 function removePerm(idx) {
     const perm = S.perms.allow[idx];
     if (perm) vscode.postMessage({ type: 'removeClaudePerm', perm });
+}
+function removeSafeCmd(idx) {
+    const cmd = (S.perms.safeCommands || [])[idx];
+    if (cmd) vscode.postMessage({ type: 'removeSafeCommand', cmd });
+}
+function addSafeCmd() {
+    const input = document.getElementById('safe-input');
+    if (!input || !input.value.trim()) return;
+    vscode.postMessage({ type: 'addSafeCommand', cmd: input.value.trim() });
+    input.value = '';
 }
 
 function setCodexTrust(level) {
