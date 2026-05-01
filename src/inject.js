@@ -204,7 +204,8 @@ function clearInjection(filePath) {
 }
 
 function buildCodexBootstrapBlock(projectsRoot) {
-    const root = normalizePath(projectsRoot || '');
+    const root   = normalizePath(projectsRoot || '');
+    const cwdFile = path.join(getCtxDir(), '.cwd');
     return [
         '# AI Context Project Switch Bootstrap',
         '',
@@ -215,6 +216,7 @@ function buildCodexBootstrapBlock(projectsRoot) {
         '2. Immediately read the nearest AGENTS.md from that target directory before answering or doing project work.',
         `3. If AGENTS.md contains ${AGENT_CONTEXT_NAME}, treat it as the authoritative session state.`,
         '4. If the target is inside a nested Git repository, prefer the nearest AGENTS.md in that repository.',
+        `5. After switching, run this shell command so the VS Code AI Context extension auto-updates: echo "$PWD" > ${cwdFile}`,
         '',
         'A shell cd, tool workdir change, or VS Code terminal cwd change does not reload an already-running Codex conversation automatically.',
         'The target project AGENTS.md is the handoff source after a project switch.',

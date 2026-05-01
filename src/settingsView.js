@@ -24,8 +24,10 @@ const TOGGLES = [
 class SettingsViewProvider {
     static viewId = 'aiContext.settingsView';
 
-    constructor(getActiveName) {
-        this._getActiveName = getActiveName;
+    constructor(getActiveName, getPreviousName, actions = {}) {
+        this._getActiveName   = getActiveName;
+        this._getPreviousName = getPreviousName || (() => null);
+        this._actions         = actions;
         this._view = null;
     }
 
@@ -67,7 +69,14 @@ class SettingsViewProvider {
             ])),
         };
 
-        this._view.webview.postMessage({ type: 'update', active, contexts, settings, perms, version: VERSION });
+        const previous = this._getPreviousName();
+        let prevData = null;
+        if (previous && previous !== active) {
+            const pctx = loadContext(dir, previous);
+            prevData = { name: previous, root: pctx.root || '' };
+        }
+
+        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, version: VERSION });
     }
 
     async _handleMessage(msg) {
@@ -116,6 +125,10 @@ class SettingsViewProvider {
                     perms: { ...ctx.perms, codex: msg.level },
                 });
                 this.refresh();
+                break;
+            }
+            case 'switchToPrev': {
+                if (this._actions.switchToPrev) await this._actions.switchToPrev();
                 break;
             }
         }
@@ -184,6 +197,11 @@ input:checked+.slider::before{transform:translateX(12px);opacity:1}
 .codex-trust label{font-size:12px;font-weight:500;white-space:nowrap}
 select{background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:3px;padding:3px 6px;font-size:12px;font-family:var(--vscode-font-family);cursor:pointer;flex:1}
 select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
+/* Previous context card */
+.prev-card{border:1px dashed var(--vscode-widget-border,rgba(255,255,255,.1));border-radius:4px;padding:8px 12px;margin-top:6px;opacity:.7}
+.prev-label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--vscode-descriptionForeground);margin-bottom:3px}
+.prev-name{font-size:12px;font-weight:500;color:var(--vscode-foreground);margin-bottom:1px}
+.prev-root{font-size:10px;color:var(--vscode-descriptionForeground);margin-bottom:6px;word-break:break-all}
 /* Info */
 .info-row{padding:3px 0;font-size:11px;display:flex;gap:6px;flex-wrap:wrap}
 .info-k{color:var(--vscode-descriptionForeground);white-space:nowrap}
@@ -194,7 +212,7 @@ select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, contexts: [], settings: {}, perms: { claude: [], codex: 'trusted' }, version: '' };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted' }, version: '' };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -221,11 +239,19 @@ function fmt(iso) {
 }
 
 function render() {
-    const { active, contexts, settings, perms, version } = S;
+    const { active, previous, contexts, settings, perms, version } = S;
     const activeCtx   = contexts.find(c => c.name === active);
     const agents      = settings.agents || ['claude','codex','copilot'];
     const claudePerms = perms.allow || [];
     const codexTrust  = perms.codex  || 'trusted';
+
+    const prevCard = previous ? \`
+        <div class="prev-card">
+            <div class="prev-label">↩ Previous</div>
+            <div class="prev-name">\${esc(previous.name)}</div>
+            <div class="prev-root">\${esc(previous.root)}</div>
+            <button class="sec" onclick="send('switchToPrev')">⇄ Make Active</button>
+        </div>\` : '';
 
     const permsBody = active ? \`
         <div class="perm-subsec">Allow List — Claude &amp; Codex (\${claudePerms.length})</div>
@@ -256,9 +282,9 @@ function render() {
                     <div class="btn-row">
                         <button onclick="send('reinject')">↺ Reinject</button>
                         <button class="sec" onclick="send('setActive')">⇄ Switch</button>
-                    </div></div>\`
+                    </div></div>\${prevCard}\`
                 : \`<div class="no-active">No active context</div>
-                   <button onclick="send('setActive')">Set Active</button>\`
+                   <button onclick="send('setActive')">Set Active</button>\${prevCard}\`
         ) +
         section('projects', \`Projects (\${contexts.length})\`, true,
             contexts.map(c => \`

@@ -37,12 +37,17 @@ const {
 } = require('./inject');
 const { getCliPath, buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude } = require('./claude');
 
-const ACTIVE_KEY = 'ai.activeContext';
+const ACTIVE_KEY   = 'ai.activeContext';
+const PREVIOUS_KEY = 'ai.previousContext';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getActive(wsState) {
     return wsState.get(ACTIVE_KEY) || null;
+}
+
+function getPrevious(wsState) {
+    return wsState.get(PREVIOUS_KEY) || null;
 }
 
 async function setActive(wsState, name) {
@@ -306,16 +311,33 @@ function activate(context) {
     }
 
     // Wrap wsState so every setActive call refreshes the status bar and settings panel.
+    // Saves the previous active context before overwriting so the panel can show it.
     const trackedWsState = {
         get:    (...a) => wsState.get(...a),
         update: async (key, value) => {
+            if (key === ACTIVE_KEY) {
+                const current = wsState.get(ACTIVE_KEY);
+                if (current && current !== value) await wsState.update(PREVIOUS_KEY, current);
+            }
             await wsState.update(key, value);
             if (key === ACTIVE_KEY) { updateStatusBar(); settingsView.refresh(); }
         },
     };
 
     // ── Settings panel (sidebar WebviewView) ──────────────────────────────────
-    const settingsView = new SettingsViewProvider(() => getActive(trackedWsState));
+    const settingsView = new SettingsViewProvider(
+        () => getActive(trackedWsState),
+        () => getPrevious(trackedWsState),
+        {
+            switchToPrev: async () => {
+                const prev = getPrevious(trackedWsState);
+                if (!prev) return;
+                await setActive(trackedWsState, prev);
+                injectAndApplyPerms(dir, prev);
+                notify(`AI Context: switched to [${prev}]`);
+            },
+        }
+    );
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(SettingsViewProvider.viewId, settingsView)
     );

@@ -5,6 +5,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.9.7] — Live permission capture from Claude & Codex
+
+### Added
+
+- **Claude permission watcher:** Extension now watches `~/.claude/settings.json`.
+  Any command approved via "Allow always" in a Claude Code session is automatically
+  captured, wildcarded (e.g. `Bash(git log --oneline -5)` → `Bash(git *)`), and
+  stored in the active project's `perms.claude` array. No manual capture step needed.
+- **Codex trust watcher:** Extension watches `~/.codex/config.toml`. If Codex
+  updates the trust level for the active project's root, it is synced back into
+  `perms.codex` automatically.
+- Both watchers are loop-safe: permissions written by the extension during project
+  switch are already covered by stored perms and produce no false captures.
+- Settings panel refreshes automatically when new permissions are captured.
+
+---
+
+## [2.9.5] — Settings panel (sidebar WebviewView)
+
+### Added
+
+- **Activity bar panel:** New sidebar view (database icon) showing active context,
+  all tracked projects, behaviour toggles, agent checkboxes, and version info.
+  Refreshes automatically on every context switch or context store change.
+- Behaviour toggles (followActiveEditor, followTerminalCwd, autoDetect, etc.) are
+  editable directly from the panel — no need to open VS Code Settings.
+- Agent checkboxes (claude, codex, copilot, cursor, windsurf, kilo) toggle inject
+  targets live without reloading.
+- Collapsible sections with VS Code-native theming.
+
+---
+
+## [2.9.4] — Fix redundant re-injection on same-project tab switches
+
+### Fixed
+
+- `syncActiveContextForPath` now only calls `injectAndApplyPerms` and `bootstrapFromGit`
+  when the context actually changes (`matched !== previous`). Previously it re-injected
+  on every editor tab switch even when staying in the same project, causing constant
+  file writes and masking the notification for real project switches.
+
+---
+
+## [2.9.3] — Shell CWD hook auto-switching
+
+### Added
+
+- **Shell PROMPT_COMMAND hook:** A one-line addition to `~/.bashrc` writes `$PWD` to
+  `~/.ai-context/.cwd` on every terminal prompt. The extension watches this file and
+  calls `syncActiveContextForPath` whenever it changes, so context switches automatically
+  when you `cd` into a project — no editor file open required.
+
+---
+
 ## [Unreleased]
 
 ### Added
