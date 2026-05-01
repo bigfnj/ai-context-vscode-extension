@@ -1114,6 +1114,8 @@ function activate(context) {
         if (!active) return;
         const ctx   = loadContext(dir, active);
         if (!ctx.root) return;
+        // 'full-auto' intentionally writes 'trusted' to config.toml — don't sync it back
+        if (ctx.perms?.codex === 'full-auto') return;
         const level = extractCodexTrust(readCodexConfig(), normalizePath(ctx.root));
         if (!level || level === (ctx.perms?.codex || 'trusted')) return;
         saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, codex: level } });
