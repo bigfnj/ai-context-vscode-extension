@@ -327,9 +327,9 @@ function setCodexGlobalApprovalPolicy(enabled) {
 
     if (enabled) {
         if (policyIdx !== -1) {
-            lines[policyIdx] = 'approval_policy = "granular"';
+            lines[policyIdx] = 'approval_policy = "never"';
         } else {
-            lines.splice(firstSection, 0, 'approval_policy = "granular"');
+            lines.splice(firstSection, 0, 'approval_policy = "never"');
             firstSection++;
         }
         sandboxIdx = -1;
@@ -341,7 +341,7 @@ function setCodexGlobalApprovalPolicy(enabled) {
         } else {
             lines.splice(firstSection, 0, 'sandbox_mode = "danger-full-access"');
         }
-        writeCodexConfig(updateCodexGranularConfig(lines.join('\n'), { sandbox_approval: false, mcp_elicitations: false }));
+        writeCodexConfig(lines.join('\n'));
     } else {
         [policyIdx, sandboxIdx]
             .filter(i => i !== -1)
