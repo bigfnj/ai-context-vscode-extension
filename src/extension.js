@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSafeCommands } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSafeCommands, deriveSafeCommandsFromAllow } = require('./permissions');
 
 const {
     getCtxDir,
@@ -254,7 +254,7 @@ function injectAndApplyPerms(dir, name) {
         const codexTrust   = ctx.perms.codex || 'trusted';
         const safeCommands = ctx.perms.safeCommands || [];
         applyClaudePerms(allow);
-        applyCodexSafeCommands(safeCommands);
+        applyCodexSafeCommands([...safeCommands, ...deriveSafeCommandsFromAllow(allow)]);
         if (codexTrust === 'full-auto') {
             applyCodexFullAuto(true);
             applyCodexTrust(ctx.root, 'trusted');

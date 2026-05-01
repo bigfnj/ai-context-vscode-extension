@@ -423,6 +423,20 @@ function applyCodexSafeCommands(storedCommands) {
     if (merged.length !== existing.length) setCodexSafeCommands(merged);
 }
 
+// Derives Codex safeCommand prefixes from a Claude-style allow list.
+// Bash(git *) → "git",  Bash(du -sh) → "du -sh",  Bash(*) → skipped.
+function deriveSafeCommandsFromAllow(allowList) {
+    if (!Array.isArray(allowList)) return [];
+    const results = [];
+    for (const perm of allowList) {
+        const m = perm.match(/^Bash\((.+)\)$/);
+        if (!m) continue;
+        const cmd = m[1].replace(/\s*\*$/, '').trim();
+        if (cmd) results.push(cmd);
+    }
+    return [...new Set(results)];
+}
+
 function setCodexBashAlias(enabled) {
     const bashrcPath = path.join(os.homedir(), '.bashrc');
     let content = '';
@@ -517,6 +531,7 @@ module.exports = {
     extractCodexSafeCommands,
     setCodexSafeCommands,
     applyCodexSafeCommands,
+    deriveSafeCommandsFromAllow,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,
