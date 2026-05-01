@@ -316,8 +316,9 @@ function globalRegion(lines) {
 function setCodexGlobalApprovalPolicy(enabled) {
     let content = readCodexConfig();
     const lines = content ? content.split('\n') : [];
-
     let firstSection = globalRegion(lines);
+
+    // Find any top-level scalar approval_policy = "..." and sandbox_mode keys
     let policyIdx  = -1;
     let sandboxIdx = -1;
     for (let i = 0; i < firstSection; i++) {
@@ -326,34 +327,36 @@ function setCodexGlobalApprovalPolicy(enabled) {
     }
 
     if (enabled) {
+        // Remove scalar approval_policy key — [approval_policy.granular] section takes over
         if (policyIdx !== -1) {
-            lines[policyIdx] = 'approval_policy = "never"';
-        } else {
-            lines.splice(firstSection, 0, 'approval_policy = "never"');
-            firstSection++;
+            lines.splice(policyIdx, 1);
+            firstSection--;
+            if (sandboxIdx > policyIdx) sandboxIdx--;
         }
-        sandboxIdx = -1;
-        for (let i = 0; i < firstSection; i++) {
-            if (lines[i].trim().startsWith('sandbox_mode')) sandboxIdx = i;
-        }
+        // Ensure sandbox_mode is present
         if (sandboxIdx !== -1) {
             lines[sandboxIdx] = 'sandbox_mode = "danger-full-access"';
         } else {
             lines.splice(firstSection, 0, 'sandbox_mode = "danger-full-access"');
         }
-        writeCodexConfig(lines.join('\n'));
+        writeCodexConfig(updateCodexGranularConfig(lines.join('\n'), {
+            sandbox_approval: false,
+            rules:            false,
+            mcp_elicitations: false,
+        }));
     } else {
+        // Remove scalar keys and the [approval_policy.granular] section
         [policyIdx, sandboxIdx]
             .filter(i => i !== -1)
             .sort((a, b) => b - a)
             .forEach(i => lines.splice(i, 1));
-        writeCodexConfig(lines.join('\n'));
+        writeCodexConfig(removeCodexGranularSection(lines.join('\n')));
     }
 }
 
 function updateCodexGranularConfig(content, config) {
     const lines  = content ? content.split('\n') : [];
-    const header = '[approval_policy_granular_config]';
+    const header = '[approval_policy.granular]';
 
     let sectionIdx = -1;
     let sectionEnd = lines.length;
@@ -377,6 +380,32 @@ function updateCodexGranularConfig(content, config) {
         lines.splice(insertAt, 0, '', header, ...configLines, '');
     }
 
+    return lines.join('\n');
+}
+
+function removeCodexGranularSection(content) {
+    const lines  = content ? content.split('\n') : [];
+    const header = '[approval_policy.granular]';
+
+    let sectionIdx = -1;
+    let sectionEnd = lines.length;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === header) {
+            sectionIdx = i;
+            for (let j = i + 1; j < lines.length; j++) {
+                if (lines[j].trim().startsWith('[')) { sectionEnd = j; break; }
+            }
+            break;
+        }
+    }
+
+    if (sectionIdx === -1) return content;
+
+    // Also remove the blank line preceding the section header if present
+    const removeFrom = (sectionIdx > 0 && lines[sectionIdx - 1].trim() === '')
+        ? sectionIdx - 1
+        : sectionIdx;
+    lines.splice(removeFrom, sectionEnd - removeFrom);
     return lines.join('\n');
 }
 
@@ -528,6 +557,7 @@ module.exports = {
     setCodexGlobalApprovalPolicy,
     setCodexBashAlias,
     updateCodexGranularConfig,
+    removeCodexGranularSection,
     extractCodexSafeCommands,
     setCodexSafeCommands,
     applyCodexSafeCommands,
