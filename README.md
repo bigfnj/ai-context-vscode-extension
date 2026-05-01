@@ -12,7 +12,7 @@ the matching context into every configured AI agent file simultaneously.
 
 ```
 VS Code opens a project folder
-  → extension matches path against ~/.ai-context/*.json roots
+  → extension matches path against context store *.json roots
   → finds best containing root (most specific wins)
   → injects into CLAUDE.md + AGENTS.md + .github/copilot-instructions.md
   → open Claude Code, Codex, Copilot — context already there
@@ -23,41 +23,114 @@ Active editor or terminal moves into another tracked project
   → refreshes the same agent files for the new project
 
 Task runs → Claude responds with CTX_UPDATE:
-  → context JSON saved to ~/.ai-context/
+  → context JSON merged into the context store
   → file watcher fires
   → all agent files updated automatically
   → next session picks up the new state
 
-New permissions approved during task:
-  → captured & generalized (Bash(python3 -c 'x') → Bash(python3 -c *))
-  → stored per-project in context
-  → automatically reinjected on next session
-  → consolidated to global config when appearing in 2+ projects
+Claude or Codex approves a new command in their settings:
+  → extension detects the change via file watcher
+  → generalizes and stores the permission in the context
+  → reinjects on next session so you're never re-prompted
+  → permissions shared across Claude and Codex via unified allow list
 ```
 
-Context JSON files live in `~/.ai-context/` — your home directory. The injected
-files (`CLAUDE.md`, `AGENTS.md`, etc.) are materialized into each project folder
-on demand and are always derived from the home-directory store.
+Context JSON files live in the context store directory (default `~/.ai-context/`,
+configurable via `aiContext.contextDir`). The injected files (`CLAUDE.md`,
+`AGENTS.md`, etc.) are materialized into each project folder on demand and are
+always derived from the store.
 
-For Codex, `AGENTS.md` is also written into nested Git repository roots found
-under the context root. Codex scopes model-visible instructions to its current
-working root, so a workspace like `/home/Vibe-Projects/AIContext` with a nested
-repo at `AIContext/ai-context-extension` needs an `AGENTS.md` in both places.
+## Sidebar panel
 
-If `projectsRoot` is configured and Codex is enabled, the extension also writes
-a lightweight bootstrap block to `projectsRoot/AGENTS.md`. That bootstrap tells
-Codex sessions started from the parent projects folder to read the target
-project's nearest `AGENTS.md` immediately after the user asks to move or switch
-projects. This covers the case where the agent starts in `/home/Vibe-Projects`
-and the user then asks it to move into a child project.
+Click the **AI Context** icon in the VS Code Activity Bar to open the sidebar panel.
+It shows:
 
-Multiple windows work independently. Each window auto-detects its own context on
-open. Changing the active context in one window does not affect any other window.
+- **Active Context** — name, path, Reinject and Switch buttons. When you switch
+  projects, the previous context appears below as a dashed card; click "Make Active"
+  to swap back instantly.
+- **Projects** — all tracked contexts with last-used times. Create new contexts here.
+- **Permissions** — unified allow list for the active context (shared by Claude and
+  Codex), Codex trust level dropdown (includes `full-auto`), and an Advanced
+  Permissions button.
+- **Behaviour** — toggles for all extension settings.
+- **Agents** — checkboxes for which AI agents receive context injection.
+- **About** — version and projects root.
+
+## Permissions
+
+The extension automatically captures, stores, and reinjects permissions for Claude Code
+and Codex so you are not re-prompted for already-approved commands in new sessions.
+
+### How capture works
+
+1. **Live watcher** — A file watcher on `~/.claude/settings.json` detects any new
+   entries in `permissions.allow` the moment Claude Code writes them. Each new entry
+   is generalized and stored in the active context.
+
+2. **Generalize** — Raw permissions are conservatively wildcarded before storage:
+   - `Bash(python3 -c 'long script here')` → `Bash(python3 -c *)`
+   - `Bash(git log --oneline -5)` → `Bash(git *)`
+   - Deduplication prevents redundant rules.
+
+3. **Unified allow list** — Stored under `perms.allow[]`. Applied to Claude's
+   `~/.claude/settings.json` on every context load. Also used to infer Codex trust
+   level (non-empty allow list → `trusted`).
+
+4. **Auto-consolidate** — At VS Code startup, the extension scans all projects.
+   Permissions appearing in 2+ projects are promoted to your global Claude allowlist
+   and removed from individual project contexts.
+
+### Codex trust level
+
+Codex uses a project-level trust model rather than a per-command allow list. The
+trust dropdown in the sidebar supports:
+
+| Level | Effect |
+|---|---|
+| `full-auto` | Writes `approval_policy = "never"` globally in `~/.codex/config.toml` and adds `alias codex='codex --approval-mode full-auto'` to `~/.bashrc`. Maximum automation. |
+| `trusted` | Sets `trust_level = "trusted"` for this project in `~/.codex/config.toml`. |
+| `auto` | Codex uses its own heuristic. |
+| `untrusted` | Sets `trust_level = "untrusted"`. Codex prompts for every action. |
+
+Setting `full-auto` on a project activates it globally (not just for that project),
+since Codex's full-auto mode is a session-level flag. The `aiContext.codexFullAuto`
+setting in VS Code settings is a global override that applies regardless of
+per-project trust.
+
+### Codex project switch bootstrap
+
+Codex builds its prompt from files visible at session start. A later shell `cd`,
+tool `workdir` change, or user instruction to "move into ProjectB" does not make an
+already-running Codex conversation re-read ProjectB's `AGENTS.md`.
+
+When `aiContext.codexProjectSwitchBootstrap` is enabled, AI Context Runner writes a
+small instruction block into `projectsRoot/AGENTS.md`. That block tells Codex to:
+
+1. Read the target project's nearest `AGENTS.md` after a project switch.
+2. Treat any `AI_CONTEXT` found there as the authoritative session state.
+3. Run `echo "$PWD" > {ctxDir}/.cwd` after switching, so the VS Code extension
+   auto-detects the change and updates the sidebar panel.
+
+### Codex and nested Git repos
+
+Codex reads `AGENTS.md` from the working root it runs in. If VS Code is opened at
+a parent project folder but Codex operates in a nested Git repo, the parent
+`AGENTS.md` may not be visible in Codex's prompt. AI Context Runner handles this
+by scanning for nested Git roots and injecting the same compact context into each
+nested repo's `AGENTS.md`.
+
+Verify what Codex sees with its local debugger:
+
+```bash
+codex debug prompt-input "probe context"
+```
+
+The output should include an `AGENTS.md instructions for ...` block containing `AI_CONTEXT`.
 
 ## Requirements
 
-- [Claude Code CLI](https://claude.ai/code) installed as `claude` on your PATH (WSL: inside WSL, not Windows)
 - VS Code 1.80+
+- [Claude Code CLI](https://claude.ai/code) installed and accessible (WSL: inside WSL, not Windows)
 
 ## Installation (WSL)
 
@@ -66,8 +139,8 @@ take effect on reload without repackaging:
 
 ```bash
 mkdir -p ~/.vscode-server/extensions
-ln -s /home/Vibe-Projects/AIContext/ai-context-extension \
-      ~/.vscode-server/extensions/local.ai-context-runner-2.8.3
+ln -s /path/to/ai-context-extension \
+      ~/.vscode-server/extensions/local.ai-context-runner-3.1.0
 ```
 
 Then reload VS Code:
@@ -79,45 +152,49 @@ Ctrl+Shift+P → Developer: Reload Window
 Verify installation:
 
 ```
-Ctrl+Shift+P → type "AI:" — all 9 commands should appear
+Ctrl+Shift+P → type "AI:" — all commands should appear
 ```
 
 ## Configuration
 
-Open VS Code Settings (`Ctrl+,`) and search for **AI Context**:
+Open VS Code Settings (`Ctrl+,`) and search for **AI Context**, or use the
+sidebar panel's Behaviour section, or press `Ctrl+Alt+C` for the interactive menu.
 
 | Setting | Default | Description |
 |---|---|---|
-| `aiContext.projectsRoot` | _(empty)_ | Root folder for the project picker. Set to e.g. `/home/Vibe-Projects` for WSL. Falls back to `~/projects` if blank. |
-| `aiContext.agents` | `["claude","codex","copilot"]` | Which AI agents receive context injection on workspace open. |
+| `aiContext.projectsRoot` | _(empty)_ | Root folder for the project picker and launch scan. Falls back to `~/projects`. |
+| `aiContext.agents` | `["claude","codex","copilot"]` | Which AI agents receive context injection. |
 | `aiContext.cliPath` | _(empty)_ | Full path to the `claude` binary. Uses `claude` from PATH when blank. |
 | `aiContext.autoDetect` | `true` | Auto-load matching context when opening a project folder. |
 | `aiContext.followActiveEditor` | `true` | Auto-switch context when the active editor belongs to another tracked project. |
 | `aiContext.followTerminalCwd` | `true` | Auto-switch context when VS Code shell integration reports a new active terminal directory. |
-| `aiContext.codexProjectSwitchBootstrap` | `true` | Write `projectsRoot/AGENTS.md` so Codex sessions started above projects read the target project's `AGENTS.md` after switches. |
+| `aiContext.codexProjectSwitchBootstrap` | `true` | Write `projectsRoot/AGENTS.md` bootstrap so Codex reads target project context after switches. |
+| `aiContext.codexFullAuto` | `false` | Set Codex to `--approval-mode full-auto` globally — writes alias to `~/.bashrc` and `approval_policy = "never"` to `~/.codex/config.toml`. |
 | `aiContext.scanOnLaunch` | `true` | Scan `projectsRoot` on launch and create context files for new projects. |
 | `aiContext.showNotifications` | `true` | Show informational context load/switch notifications. |
 | `aiContext.autoGitignore` | `false` | Add injected agent files to project `.gitignore`. |
 | `aiContext.contextDir` | _(empty)_ | Override the context store directory. Falls back to `~/.ai-context`. |
-| `aiContext.maxActions` | `40` | Maximum recent actions kept in context history. |
+| `aiContext.maxActions` | `40` | Maximum recent actions kept in context history (1–200). |
 
 ### Supported agents
 
 | Value | File written |
 |---|---|
 | `claude` | `CLAUDE.md` |
-| `codex` | `AGENTS.md` in the context root and nested Git repo roots |
+| `codex` | `AGENTS.md` in the context root and all nested Git repo roots |
 | `copilot` | `.github/copilot-instructions.md` |
 | `cursor` | `.cursorrules` |
 | `windsurf` | `.windsurfrules` |
-| `kilo` | `AGENTS.md` in the context root and nested Git repo roots |
+| `kilo` | `AGENTS.md` (same targets as codex) |
 
 ### WSL example (`settings.json`)
 
 ```json
 {
   "aiContext.projectsRoot": "/home/Vibe-Projects",
-  "aiContext.agents": ["claude", "codex", "copilot"]
+  "aiContext.contextDir": "/home/Vibe-Projects/.ai-context",
+  "aiContext.agents": ["claude", "codex"],
+  "aiContext.codexFullAuto": true
 }
 ```
 
@@ -139,69 +216,37 @@ for the current window.
 |---|---|---|
 | `AI: Run Task` | `Ctrl+Alt+A` | Run a task using the active context via Claude CLI |
 | `AI: Set Active Context` | `Ctrl+Alt+S` | Manually set which context is active for this window |
+| `AI: Reinject Active Context` | `Ctrl+Alt+R` | Re-inject current context into all agent files |
+| `AI: Config` | `Ctrl+Alt+C` | Interactive configuration menu |
 | `AI: New Context` | — | Create a new context and bind it to a project folder |
 | `AI: View Context` | — | Open a context file as formatted JSON |
 | `AI: Manage Permissions` | — | View, remove, or adjust per-project permissions and Codex trust level |
 | `AI: Delete Context` | — | Permanently delete a context |
 | `AI: Clean Up Contexts` | — | Bulk archive or delete — orphan detection, age display |
 | `AI: Restore Archived Context` | — | Restore a previously archived context |
-| `AI: Reinject Active Context` | `Ctrl+Alt+R` | Re-inject current context into all agent files |
-| `AI: Config` | `Ctrl+Alt+C` | Interactive configuration menu |
 
 ## Auto-detection behavior
 
 When you open a project folder, the extension:
 
-1. Scans all contexts in `~/.ai-context/*.json`
+1. Scans all contexts in the context store
 2. Finds the context whose `root` is the most specific parent of your workspace folder
 3. Sets it active and injects into all configured agent files silently
 4. Only shows a notification if it switches away from a previously active context
 
-**Example**: With contexts for `/home/Vibe-Projects/ProjectA` and
-`/home/Vibe-Projects/ProjectB`, opening either folder loads the correct context
-automatically.
-
 With `aiContext.followActiveEditor` enabled, activating a file in another tracked
 project also switches to that project's context. With `aiContext.followTerminalCwd`
-enabled, the extension follows the active integrated terminal directory when VS
-Code shell integration reports it. Terminal following depends on VS Code shell
-integration; external terminals and agent-internal tool `workdir` changes are not
-VS Code events.
+enabled, the extension follows the active integrated terminal directory.
 
-### Codex and nested Git repos
-
-Codex reads `AGENTS.md` from the working root it runs in. If VS Code is opened at
-a parent project folder but Codex operates in a nested Git repo, the parent
-`AGENTS.md` may not be included in Codex's prompt. AI Context Runner handles this
-by scanning for nested Git roots and injecting the same compact context into each
-nested repo's `AGENTS.md`.
-
-You can verify what Codex sees with its local debugger:
-
-```bash
-codex debug prompt-input "probe context"
-```
-
-The output should include an `AGENTS.md instructions for ...` block containing
-`AI_CONTEXT_V3`.
-
-### Codex project switch bootstrap
-
-Codex builds its prompt from files visible at session start. A later shell `cd`,
-tool `workdir` change, or user instruction to "move into ProjectB" does not by
-itself make an already-running Codex conversation re-read ProjectB's `AGENTS.md`.
-
-When `aiContext.codexProjectSwitchBootstrap` is enabled, AI Context Runner writes
-a small instruction block into `projectsRoot/AGENTS.md`. If Codex starts from the
-parent projects folder, that root instruction tells it to read the target
-project's nearest `AGENTS.md` after a project switch request and then use any
-`AI_CONTEXT_V3` it finds there as the authoritative session state.
+When you switch projects, the sidebar panel shows the previous context as a dashed
+card in the Active Context section. Clicking "Make Active" on it restores and
+reinjects it with one click.
 
 ## Context storage
 
-All context files live in `~/.ai-context/` — a global store in your home directory,
-independent of any project folder. Each context has a `root` field that binds it to
-a project. Injection writes derived files into each project folder.
+All context files live in the context store directory (default `~/.ai-context/`).
+Each context has a `root` field binding it to a project. Injection writes derived
+files into each project folder on demand.
 
 ```
 ~/.ai-context/
@@ -210,36 +255,6 @@ a project. Injection writes derived files into each project folder.
   archive/
     OldProject_1714000000000.json   ← archived, not deleted
 ```
-
-## Permission capture & reinjection
-
-The extension automatically captures and manages permissions for Claude Code and Codex
-so you're not re-prompted for already-approved commands in new sessions.
-
-**How it works:**
-
-1. **Capture** — When you run a task, the extension snapshots Claude's permission
-   allowlist before and after, then diffs it to detect newly approved commands.
-
-2. **Generalize** — Captured permissions are conservatively generalized:
-   - `Bash(python3 -c 'long script here')` → `Bash(python3 -c *)`
-   - `/home/user/projects/ProjectA/file.md` → `/home/user/projects/**`
-   - Deduplication prevents redundant rules.
-
-3. **Store per-project** — Generalized permissions are stored in the context file
-   under `perms.claude[]` and `perms.codex` (trust level).
-
-4. **Reinject on load** — Every context load merges stored permissions into
-   `~/.claude/settings.json` and updates `~/.codex/config.toml`.
-
-5. **Auto-consolidate** — At VS Code startup, the extension scans all projects.
-   Permissions appearing in 2+ projects are automatically promoted to your global
-   allowlist and removed from individual projects.
-
-**Manage permissions:**
-
-Use **AI: Manage Permissions** to view, remove individual rules, or adjust the
-Codex trust level for the active context. Also accessible from **AI: Config** menu.
 
 ## Context file format
 
@@ -265,7 +280,7 @@ Codex trust level for the active context. Also accessible from **AI: Config** me
     "compactionVersion": 1
   },
   "perms": {
-    "claude": ["Bash(python3 -c *)", "Bash(git *)", "WebSearch"],
+    "allow": ["Bash(python3 -c *)", "Bash(git *)", "WebSearch"],
     "codex": "trusted"
   },
   "createdAt": "2026-04-28T12:00:00.000Z",
@@ -290,8 +305,9 @@ Codex trust level for the active context. Also accessible from **AI: Config** me
 | `a` | Recent actions (string array) |
 | `e` | Last error, or null |
 | `i` | Intent / goal |
-| `m` | Optional metadata |
-| `perms` | Captured & generalized permissions — `claude` (allowlist), `codex` (trust level) |
+| `m` | Compaction metadata |
+| `perms.allow` | Generalized permission patterns — applied to Claude's allowlist and used to infer Codex trust on every context load |
+| `perms.codex` | Codex trust level: `full-auto`, `trusted`, `auto`, or `untrusted` |
 | `createdAt` | Set once on creation, never modified |
 | `lastUsed` | Updated automatically on every save |
 
@@ -299,22 +315,27 @@ Codex trust level for the active context. Also accessible from **AI: Config** me
 
 The context file separates durable memory from recent activity:
 
-- `d`, `c`, `f`, and `b` are durable memory fields. Keep these compact and only store information that should survive across sessions.
-- `a` is a recent activity trail. The default cap is 40 actions and is configurable with `aiContext.maxActions`.
-- When `a` exceeds the cap, older overflow is summarized into `h` before trimming. The agent receives both compact history and recent actions.
-- Older or repeated list entries are normalized on save. Lists are deduplicated and trimmed from the oldest entries first.
+- `d`, `c`, `f`, and `b` are durable memory fields. Keep these compact — only
+  information that should survive across sessions.
+- `a` is a recent activity trail. The default cap is 40 actions, configurable with
+  `aiContext.maxActions`.
+- When `a` exceeds the cap, older overflow is summarized into `h` before trimming.
+  The agent receives both compact history and recent actions.
+- Older or repeated list entries are normalized on save. Lists are deduplicated and
+  trimmed from the oldest entries first.
 
 ## Injected format
 
-The full context stays in `~/.ai-context/`. Agent files receive a compact projection:
+The full context stays in the store. Agent files receive a compact projection:
 
 ```text
-AI_CONTEXT_V3={"v":3,"p":"ProjectA","root":"/home/Vibe-Projects/ProjectA","t":"current-task","i":"intent / goal","n":"next concrete action","s":{},"mem":{"b":[],"d":[],"c":[],"f":[]},"h":[],"a":[],"e":null}
-Use AI_CONTEXT_V3 as authoritative session state. Continue from n; preserve mem/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.
+AI_CONTEXT={"v":3,"p":"ProjectA","root":"/home/Vibe-Projects/ProjectA","t":"current-task","i":"intent","n":"next action","s":{},"b":[],"d":[],"c":[],"f":[],"h":[],"a":[],"e":null}
+Use AI_CONTEXT as authoritative session state. Continue from n; preserve b/d/c/f/h; append only meaningful recent work to a; update context through CTX_UPDATE when supported.
+After each response, write a single line `CTX_UPDATE:{...}` to {storePath}.update — the VS Code extension reads, merges, and deletes it to persist state after every turn.
 ```
 
-The injected projection omits bookkeeping such as `createdAt`, `lastUsed`, and
-compaction metadata to reduce token cost for agents.
+The injected projection omits bookkeeping (`createdAt`, `lastUsed`, compaction
+metadata) to reduce token cost for agents.
 
 ## What to gitignore in your projects
 
@@ -326,4 +347,4 @@ AGENTS.md
 .github/copilot-instructions.md
 ```
 
-The `~/.ai-context/` store is user-specific and should not be committed to any project.
+The context store is user-specific and should not be committed to any project.
