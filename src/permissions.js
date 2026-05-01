@@ -530,7 +530,7 @@ function consolidatePermissionsToGlobal(contexts, loadContext, saveContext) {
             const filtered = allowPerms.filter(p => !toPromote.includes(p));
 
             if (filtered.length !== allowPerms.length) {
-                saveContext(ctxName, { ...ctx, perms: { ...ctx.perms, claude: filtered } });
+                saveContext(ctxName, { ...ctx, perms: { ...ctx.perms, allow: filtered } });
             }
         } catch {
             // Skip invalid contexts
