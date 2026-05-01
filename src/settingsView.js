@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const { listContexts, loadContext, saveContext, getCtxDir, getProjectsRoot } = require('./context');
 const { getAgents } = require('./inject');
+const { listRemovalCommands } = require('./permissions');
 
 const VERSION = require('../package.json').version;
 
@@ -19,6 +20,7 @@ const TOGGLES = [
     { key: 'autoGitignore',               label: 'Auto .gitignore',       desc: 'Add injected AI files to .gitignore automatically' },
     { key: 'codexProjectSwitchBootstrap', label: 'Codex Bootstrap',       desc: 'Write AGENTS.md bootstrap to projectsRoot for Codex' },
     { key: 'codexFullAuto',               label: 'Codex Full-Auto',       desc: 'Every codex session runs --approval-mode full-auto (alias in ~/.bashrc + global config.toml)', defaultOff: true },
+    { key: 'preventRemovalCapture',       label: 'Prevent Removal Capture',  desc: 'Block rm, del, rmdir, erase and similar commands from being captured and remembered', defaultOff: true },
 ];
 
 class SettingsViewProvider {
@@ -78,7 +80,9 @@ class SettingsViewProvider {
             prevData = { name: previous, root: pctx.root || '' };
         }
 
-        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, version: VERSION });
+        const removalCount = listRemovalCommands(perms.allow).length;
+
+        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, version: VERSION });
     }
 
     async _handleMessage(msg) {
@@ -181,6 +185,11 @@ class SettingsViewProvider {
                 if (this._actions.switchToPrev) await this._actions.switchToPrev();
                 break;
             }
+            case 'manageRemovalCommands': {
+                if (this._actions.manageRemovalCommands) await this._actions.manageRemovalCommands();
+                this.refresh();
+                break;
+            }
         }
     }
 
@@ -212,6 +221,10 @@ button.sec:hover{background:var(--vscode-button-secondaryHoverBackground)}
 button.full{width:100%;margin-top:8px}
 button.danger{background:var(--vscode-inputValidation-errorBackground,#5a1d1d);color:var(--vscode-foreground)}
 button.danger:hover{opacity:.85}
+button.warn{background:var(--vscode-inputValidation-warningBackground,#664d00);color:var(--vscode-foreground);margin-top:8px}
+button.warn:hover{opacity:.85}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:disabled:hover{opacity:.4;background:var(--vscode-button-background)}
 .ctx-item{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
 .ctx-item:last-child{border-bottom:none}
 .ctx-info{flex:1;min-width:0}
@@ -276,7 +289,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, version: '' };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, version: '' };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -290,6 +303,7 @@ const TOGGLES = [
     { key:'autoGitignore',               label:'Auto .gitignore',       desc:'Add injected AI files to .gitignore automatically' },
     { key:'codexProjectSwitchBootstrap', label:'Codex Bootstrap',       desc:'Write AGENTS.md bootstrap to projectsRoot for Codex' },
     { key:'codexFullAuto',               label:'Codex Full-Auto',       desc:'Every codex session runs --approval-mode full-auto (alias in ~/.bashrc + global config.toml)' },
+    { key:'preventRemovalCapture',       label:'Prevent Removal Capture',  desc:'Block rm, del, rmdir, erase and similar commands from being captured and remembered' },
 ];
 
 function fmt(iso) {
@@ -387,7 +401,7 @@ function render() {
                 </div>\`).join('') +
             \`<button class="sec full" onclick="send('newContext')">+ New Context</button>\`
         ) +
-        section('permissions', \`Permissions\${active ? ' — ' + esc(active) : ''}\`, true, permsBody) +
+        section('permissions', \`Permissions\${active ? ' — ' + esc(active) : ''}\`, false, permsBody) +
         section('codex', 'Codex Settings', true, codexBody) +
         section('behaviour', 'Behaviour', true,
             TOGGLES.map(t => \`
@@ -402,6 +416,7 @@ function render() {
                         <span class="slider"></span>
                     </label>
                 </div>\`).join('')
+            + renderRemovalButton()
         ) +
         section('agents', 'Agents', true,
             ALL_AGENTS.map(a => \`
@@ -459,6 +474,16 @@ function setCodexTrust(level) {
 function setCodexSandbox(data) {
     vscode.postMessage({ type: 'setCodexSandbox', ...data });
 }
+
+function renderRemovalButton() {
+    const count = S.removalCount || 0;
+    const disabled = count === 0;
+    const label = 'Manage Removal Memory' + (count > 0 ? ' (' + count + ')' : '');
+    const tip = disabled ? 'No removal commands to purge' : count + ' removal command(s) — click to manage';
+    return '<button class="warn full" onclick="manageRemovals()" title="' + esc(tip) + '"' + (disabled ? ' disabled' : '') + '>' + esc(label) + '</button>';
+}
+
+function manageRemovals(){ vscode.postMessage({type:'manageRemovalCommands'}); }
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function send(type, data){ vscode.postMessage({type, ...data}); }

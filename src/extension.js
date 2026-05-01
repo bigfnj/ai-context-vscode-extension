@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand } = require('./permissions');
 
 const {
     getCtxDir,
@@ -339,6 +339,70 @@ function activate(context) {
                 await setActive(trackedWsState, prev);
                 injectAndApplyPerms(dir, prev);
                 notify(`AI Context: switched to [${prev}]`);
+            },
+            manageRemovalCommands: async () => {
+                const ctxName = getActive(trackedWsState);
+                while (true) {
+                    const ctx = ctxName ? loadContext(dir, ctxName) : null;
+                    const contextAllow = (ctx && ctx.perms && ctx.perms.allow) ? ctx.perms.allow : [];
+                    const items = listRemovalCommands(contextAllow);
+
+                    if (items.length === 0) {
+                        vscode.window.showInformationMessage('No removal commands to purge.');
+                        return;
+                    }
+
+                    const sourceLabel = { context: 'context', claude: 'claude global', codex: 'codex safe' };
+                    const pickItems = [
+                        { label: '$(trash)  Purge All', description: `${items.length} removal command(s)`, _purgeAll: true },
+                        ...items.map(item => ({
+                            label: `$(close)  ${item.perm}`,
+                            description: sourceLabel[item.source] || item.source,
+                            _item: item,
+                        })),
+                    ];
+
+                    const pick = await vscode.window.showQuickPick(pickItems, {
+                        placeHolder: `${items.length} removal command(s) — select to remove or "Purge All"`,
+                        matchOnDescription: true,
+                    });
+
+                    if (!pick) return;
+
+                    if (pick._purgeAll) {
+                        const result = purgeRemovalMemory();
+                        let contextRemoved = 0;
+                        if (ctx && Array.isArray(ctx.perms && ctx.perms.allow)) {
+                            const fresh = loadContext(dir, ctxName);
+                            const before = (fresh.perms && fresh.perms.allow ? fresh.perms.allow : []).length;
+                            const filtered = (fresh.perms && fresh.perms.allow ? fresh.perms.allow : []).filter(p => {
+                                const m = p.match(/^(\w+)\((.+)\)$/);
+                                if (!m) return true;
+                                return !(m[1].toLowerCase() === 'bash' && isRemovalCommand(m[2]));
+                            });
+                            contextRemoved = before - filtered.length;
+                            if (contextRemoved > 0) {
+                                saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, allow: filtered } });
+                            }
+                        }
+                        const total = result.removed + contextRemoved;
+                        vscode.window.showInformationMessage(`Purged ${total} removal command(s).`);
+                        return;
+                    }
+
+                    if (pick._item) {
+                        const { source, perm } = pick._item;
+                        if (source === 'context' && ctxName) {
+                            const fresh = loadContext(dir, ctxName);
+                            const filtered = (fresh.perms && fresh.perms.allow ? fresh.perms.allow : []).filter(p => p !== perm);
+                            saveContext(dir, ctxName, { ...fresh, perms: { ...fresh.perms, allow: filtered } });
+                        } else if (source === 'claude') {
+                            removeRemovalCommandFromClaudeGlobal(perm);
+                        } else if (source === 'codex') {
+                            removeRemovalCommandFromCodex(perm);
+                        }
+                    }
+                }
             },
         }
     );
@@ -740,7 +804,8 @@ function activate(context) {
                     // Capture new permissions granted during task
                     const afterSettings = readClaudeSettings();
                     const afterAllow = (afterSettings.permissions && afterSettings.permissions.allow) ? afterSettings.permissions.allow : [];
-                    const newPerms = captureNewClaudePerms(beforeAllow, afterAllow, ctx.root, ctx.perms && ctx.perms.allow ? ctx.perms.allow : []);
+                    const preventRemoval = getCfg().get('preventRemovalCapture') === true;
+                    const newPerms = captureNewClaudePerms(beforeAllow, afterAllow, ctx.root, ctx.perms && ctx.perms.allow ? ctx.perms.allow : [], preventRemoval);
 
                     if (newPerms.length > 0) {
                         const savedCtx = loadContext(dir, ctxName);

@@ -10,3 +10,5 @@ AGENTS.md
 *.code-workspace
 .extension
 .settings/
+CLAUDE.md
+.github/copilot-instructions.md

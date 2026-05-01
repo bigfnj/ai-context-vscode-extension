@@ -198,11 +198,21 @@ function isClaudePermCovered(candidate, existingPerms) {
     return false;
 }
 
-function captureNewClaudePerms(beforeAllow, afterAllow, projectRoot, existingPerms = []) {
+function captureNewClaudePerms(beforeAllow, afterAllow, projectRoot, existingPerms = [], preventRemovalCapture = false) {
     if (!Array.isArray(beforeAllow) || !Array.isArray(afterAllow)) return [];
 
     const beforeSet = new Set(beforeAllow);
-    const newRaw = afterAllow.filter(p => !beforeSet.has(p));
+    let newRaw = afterAllow.filter(p => !beforeSet.has(p));
+
+    if (preventRemovalCapture) {
+        newRaw = newRaw.filter(perm => {
+            const m = perm.match(/^(\w+)\((.*)\)$/);
+            if (!m) return true;
+            const [, tool, cmd] = m;
+            if (tool.toLowerCase() === 'bash' && isRemovalCommand(cmd)) return false;
+            return true;
+        });
+    }
 
     const result = [];
     for (const raw of newRaw) {
@@ -409,6 +419,52 @@ function removeCodexGranularSection(content) {
     return lines.join('\n');
 }
 
+// ── Removal command detection ─────────────────────────────────────────────────
+
+const REMOVAL_PATTERNS = [
+    /^(rm|rmdir|del|erase|remove|wipe|unlink|uninstall|purge)$/i,
+    /^rm\s/i,
+    /^rmdir\s/i,
+    /^del\s/i,
+    /^erase\s/i,
+];
+
+function isRemovalCommand(cmdStr) {
+    if (!cmdStr || typeof cmdStr !== 'string') return false;
+    const trimmed = cmdStr.trim();
+    for (const pattern of REMOVAL_PATTERNS) {
+        if (pattern.test(trimmed)) return true;
+    }
+    return false;
+}
+
+function filterRemovalCommands(commands) {
+    if (!Array.isArray(commands)) return [];
+    return commands.filter(cmd => !isRemovalCommand(cmd));
+}
+
+function hasRemovalCommands(claudePerms) {
+    if (!Array.isArray(claudePerms)) return false;
+    for (const perm of claudePerms) {
+        const m = perm.match(/^(\w+)\((.*)\)$/);
+        if (!m) continue;
+        const [, tool, cmd] = m;
+        if (tool.toLowerCase() === 'bash' && isRemovalCommand(cmd)) return true;
+    }
+    return false;
+}
+
+function purgeRemovalCommandsFromAllow(allowList) {
+    if (!Array.isArray(allowList)) return [];
+    return allowList.filter(perm => {
+        const m = perm.match(/^(\w+)\((.*)\)$/);
+        if (!m) return true;
+        const [, tool, cmd] = m;
+        if (tool.toLowerCase() === 'bash' && isRemovalCommand(cmd)) return false;
+        return true;
+    });
+}
+
 // ── Codex safeCommands ────────────────────────────────────────────────────────
 
 function extractCodexSafeCommands(content) {
@@ -523,6 +579,76 @@ function applyCodexFullAuto(enabled) {
     setCodexBashAlias(!!enabled);
 }
 
+function listRemovalCommands(contextAllow) {
+    const result = [];
+
+    for (const perm of (contextAllow || [])) {
+        const m = perm.match(/^(\w+)\((.+)\)$/);
+        if (!m) continue;
+        if (m[1].toLowerCase() === 'bash' && isRemovalCommand(m[2])) {
+            result.push({ source: 'context', perm });
+        }
+    }
+
+    const claudeAllow = readClaudeSettings()?.permissions?.allow || [];
+    for (const perm of claudeAllow) {
+        const m = perm.match(/^(\w+)\((.+)\)$/);
+        if (!m) continue;
+        if (m[1].toLowerCase() === 'bash' && isRemovalCommand(m[2])) {
+            result.push({ source: 'claude', perm });
+        }
+    }
+
+    const codexCommands = extractCodexSafeCommands(readCodexConfig());
+    for (const cmd of codexCommands) {
+        if (isRemovalCommand(cmd)) {
+            result.push({ source: 'codex', perm: cmd });
+        }
+    }
+
+    return result;
+}
+
+function removeRemovalCommandFromClaudeGlobal(perm) {
+    const settings = readClaudeSettings();
+    if (!settings.permissions || !Array.isArray(settings.permissions.allow)) return false;
+    const before = settings.permissions.allow.length;
+    settings.permissions.allow = settings.permissions.allow.filter(p => p !== perm);
+    if (settings.permissions.allow.length === before) return false;
+    writeClaudeSettings(settings);
+    return true;
+}
+
+function removeRemovalCommandFromCodex(cmd) {
+    const existing = extractCodexSafeCommands(readCodexConfig());
+    const filtered = existing.filter(c => c !== cmd);
+    if (filtered.length === existing.length) return false;
+    setCodexSafeCommands(filtered);
+    return true;
+}
+
+function purgeRemovalMemory() {
+    const settings = readClaudeSettings();
+    if (!settings.permissions) settings.permissions = {};
+    if (!Array.isArray(settings.permissions.allow)) settings.permissions.allow = [];
+
+    const beforeClaude = settings.permissions.allow.length;
+    settings.permissions.allow = purgeRemovalCommandsFromAllow(settings.permissions.allow);
+    const claudeRemoved = beforeClaude - settings.permissions.allow.length;
+    writeClaudeSettings(settings);
+
+    const codexContent = readCodexConfig();
+    const existing = extractCodexSafeCommands(codexContent);
+    const filtered = filterRemovalCommands(existing);
+    let codexRemoved = 0;
+    if (filtered.length !== existing.length) {
+        codexRemoved = existing.length - filtered.length;
+        setCodexSafeCommands(filtered);
+    }
+
+    return { removed: claudeRemoved + codexRemoved, claude: claudeRemoved, codex: codexRemoved };
+}
+
 function consolidatePermissionsToGlobal(contexts, loadContext, saveContext) {
     if (!Array.isArray(contexts) || contexts.length === 0) return { consolidated: [], count: 0 };
 
@@ -595,6 +721,14 @@ module.exports = {
     setCodexSafeCommands,
     applyCodexSafeCommands,
     deriveSafeCommandsFromAllow,
+    isRemovalCommand,
+    filterRemovalCommands,
+    hasRemovalCommands,
+    purgeRemovalCommandsFromAllow,
+    purgeRemovalMemory,
+    listRemovalCommands,
+    removeRemovalCommandFromClaudeGlobal,
+    removeRemovalCommandFromCodex,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,
