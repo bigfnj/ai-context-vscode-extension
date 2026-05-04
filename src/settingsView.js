@@ -21,6 +21,7 @@ const TOGGLES = [
     { key: 'codexProjectSwitchBootstrap', label: 'Codex Bootstrap',       desc: 'Write AGENTS.md bootstrap to projectsRoot for Codex' },
     { key: 'codexFullAuto',               label: 'Codex Full-Auto',       desc: 'Every codex session runs --approval-mode full-auto (alias in ~/.bashrc + global config.toml)', defaultOff: true },
     { key: 'preventRemovalCapture',       label: 'Prevent Removal Capture',  desc: 'Block rm, del, rmdir, erase and similar commands from being captured and remembered', defaultOff: true },
+    { key: 'autoPromoteOnSwitch',         label: 'Auto-Promote On Switch',   desc: 'When the active context switches, push the outgoing primary onto the secondary stack (LRU eviction respects pinned secondaries)' },
 ];
 
 class SettingsViewProvider {
@@ -82,11 +83,12 @@ class SettingsViewProvider {
 
         const removalCount = listRemovalCommands(perms.allow).length;
 
+        const pinnedSet = new Set(this._actions.getPinned ? this._actions.getPinned() : []);
         const secondariesList = (this._actions.getSecondaries ? this._actions.getSecondaries() : [])
             .filter(n => n && n !== active)
             .map(name => {
                 const ctx = loadContext(dir, name);
-                return { name, root: ctx.root || '' };
+                return { name, root: ctx.root || '', pinned: pinnedSet.has(name) };
             });
 
         this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION });
@@ -229,6 +231,10 @@ class SettingsViewProvider {
                 if (this._actions.removeSecondary) await this._actions.removeSecondary(msg.name);
                 break;
             }
+            case 'togglePinSecondary': {
+                if (this._actions.togglePinSecondary) await this._actions.togglePinSecondary(msg.name);
+                break;
+            }
         }
     }
 
@@ -318,9 +324,13 @@ select:disabled{opacity:.5;cursor:not-allowed}
 .sec-list{margin-top:6px;padding:6px 10px;background:var(--vscode-editor-inactiveSelectionBackground,rgba(255,255,255,.04));border-radius:4px}
 .sec-list-hdr{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vscode-descriptionForeground);margin-bottom:4px}
 .sec-empty{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;padding:2px 0}
-.sec-chip{display:inline-flex;align-items:center;background:var(--vscode-input-background,#3c3c3c);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:10px;padding:2px 4px 2px 8px;margin:2px 4px 2px 0;font-size:11px;max-width:100%}
-.sec-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
-.sec-chip-rm{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;margin-left:4px}
+.sec-chip{display:inline-flex;align-items:center;background:var(--vscode-input-background,#3c3c3c);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:10px;padding:2px 4px 2px 4px;margin:2px 4px 2px 0;font-size:11px;max-width:100%}
+.sec-chip-pinned{border-color:var(--vscode-textLink-foreground,#4fc3f7)}
+.sec-chip-pin{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:11px;line-height:1;padding:0 2px;opacity:.5}
+.sec-chip-pin.on{opacity:1;color:var(--vscode-textLink-foreground,#4fc3f7)}
+.sec-chip-pin:hover{opacity:1}
+.sec-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;padding:0 4px}
+.sec-chip-rm{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;margin-left:2px}
 .sec-chip-rm:hover{color:var(--vscode-errorForeground,#f48771)}
 .sec-chip-add{background:none;border:1px dashed var(--vscode-input-border,rgba(255,255,255,.15));color:var(--vscode-descriptionForeground);border-radius:10px;padding:2px 8px;margin:2px 0;font-size:11px;cursor:pointer}
 .sec-chip-add:hover{background:var(--vscode-input-background,#3c3c3c);color:var(--vscode-foreground)}
@@ -352,6 +362,7 @@ const TOGGLES = [
     { key:'codexProjectSwitchBootstrap', label:'Codex Bootstrap',       desc:'Write AGENTS.md bootstrap to projectsRoot for Codex' },
     { key:'codexFullAuto',               label:'Codex Full-Auto',       desc:'Every codex session runs --approval-mode full-auto (alias in ~/.bashrc + global config.toml)' },
     { key:'preventRemovalCapture',       label:'Prevent Removal Capture',  desc:'Block rm, del, rmdir, erase and similar commands from being captured and remembered' },
+    { key:'autoPromoteOnSwitch',         label:'Auto-Promote On Switch',   desc:'When the active context switches, push the outgoing primary onto the secondary stack (LRU eviction respects pinned secondaries)' },
 ];
 
 function fmt(iso) {
@@ -387,7 +398,8 @@ function render() {
             <div class="sec-list-hdr">Secondary contexts (\${secList.length})</div>
             \${secList.length
                 ? secList.map(s => \`
-                    <div class="sec-chip">
+                    <div class="sec-chip\${s.pinned ? ' sec-chip-pinned' : ''}">
+                        <button class="sec-chip-pin\${s.pinned ? ' on' : ''}" title="\${s.pinned ? 'Unpin (allow LRU eviction)' : 'Pin (exempt from LRU eviction)'}" onclick="togglePin('\${esc(s.name)}')">\${s.pinned ? '📌' : '◌'}</button>
                         <span class="sec-chip-name" title="\${esc(s.root)}">\${esc(s.name)}</span>
                         <button class="sec-chip-rm" title="Remove secondary" onclick="removeSec('\${esc(s.name)}')">×</button>
                     </div>\`).join('')
@@ -548,6 +560,7 @@ function renderRemovalButton() {
 
 function manageRemovals(){ vscode.postMessage({type:'manageRemovalCommands'}); }
 function removeSec(name){ vscode.postMessage({type:'removeSecondary', name}); }
+function togglePin(name){ vscode.postMessage({type:'togglePinSecondary', name}); }
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function send(type, data){ vscode.postMessage({type, ...data}); }

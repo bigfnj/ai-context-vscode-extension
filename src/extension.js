@@ -41,6 +41,7 @@ const { getCliPath, buildPrompt, extractContextUpdate, stripContextUpdate, runWi
 const ACTIVE_KEY    = 'ai.activeContext';
 const PREVIOUS_KEY  = 'ai.previousContext';
 const SECONDARY_KEY = 'ai.secondaryContexts';
+const PINNED_KEY    = 'ai.pinnedSecondaries';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -71,13 +72,86 @@ async function addSecondary(wsState, name) {
     const active = wsState.get(ACTIVE_KEY);
     if (name === active) return;
     const cur = getSecondaries(wsState);
-    if (cur.includes(name)) return;
-    return setSecondaries(wsState, [...cur, name]);
+    // Prepend so newest is at front; LRU eviction happens at the tail. If the
+    // name was already present, move it to the front.
+    const next = [name, ...cur.filter(n => n !== name)];
+    await setSecondaries(wsState, next);
+    return enforceSecondaryCap(wsState);
 }
 
 async function removeSecondary(wsState, name) {
     const cur = getSecondaries(wsState);
-    return setSecondaries(wsState, cur.filter(n => n !== name));
+    await setSecondaries(wsState, cur.filter(n => n !== name));
+    // Also clear from pinned set so pin state doesn't outlive the secondary itself.
+    const pinned = getPinned(wsState);
+    if (pinned.includes(name)) await setPinned(wsState, pinned.filter(n => n !== name));
+}
+
+function getPinned(wsState) {
+    const v = wsState.get(PINNED_KEY);
+    return Array.isArray(v) ? v.filter(n => typeof n === 'string' && n) : [];
+}
+
+async function setPinned(wsState, names) {
+    const clean = Array.isArray(names) ? [...new Set(names.filter(n => typeof n === 'string' && n))] : [];
+    return wsState.update(PINNED_KEY, clean);
+}
+
+function isPinned(wsState, name) {
+    return getPinned(wsState).includes(name);
+}
+
+async function togglePinSecondary(wsState, name) {
+    if (!name) return;
+    const cur = getPinned(wsState);
+    if (cur.includes(name)) {
+        return setPinned(wsState, cur.filter(n => n !== name));
+    }
+    // Only allow pinning items that are currently secondaries.
+    if (!getSecondaries(wsState).includes(name)) return;
+    return setPinned(wsState, [...cur, name]);
+}
+
+function getMaxSecondaries() {
+    const v = vscode.workspace.getConfiguration('aiContext').get('maxSecondaryContexts');
+    return (typeof v === 'number' && v >= 0) ? Math.floor(v) : 3;
+}
+
+function autoPromoteEnabled() {
+    return vscode.workspace.getConfiguration('aiContext').get('autoPromoteOnSwitch') !== false;
+}
+
+// Trim secondaries down to the configured cap, evicting from the tail (oldest)
+// while skipping any pinned entries.
+async function enforceSecondaryCap(wsState) {
+    const cap = getMaxSecondaries();
+    const cur = getSecondaries(wsState);
+    if (cur.length <= cap) return;
+    const pinned = new Set(getPinned(wsState));
+    const result = [...cur];
+    while (result.length > cap) {
+        let evictIdx = -1;
+        for (let i = result.length - 1; i >= 0; i--) {
+            if (!pinned.has(result[i])) { evictIdx = i; break; }
+        }
+        if (evictIdx === -1) break; // every entry is pinned — give up evicting
+        result.splice(evictIdx, 1);
+    }
+    if (result.length !== cur.length) {
+        await setSecondaries(wsState, result);
+    }
+}
+
+// Auto-promote: when the active context switches from outgoing -> incoming,
+// push outgoing onto the secondary stack (front), drop incoming from
+// secondaries (it's now primary), then enforce the cap.
+async function doAutoPromote(wsState, outgoingName, incomingName) {
+    if (!outgoingName || outgoingName === incomingName) return;
+    if (!autoPromoteEnabled()) return;
+    const cur = getSecondaries(wsState);
+    const next = [outgoingName, ...cur.filter(n => n !== outgoingName && n !== incomingName)];
+    await setSecondaries(wsState, next);
+    return enforceSecondaryCap(wsState);
 }
 
 function getCfg() {
@@ -378,15 +452,25 @@ function activate(context) {
 
     // Wrap wsState so every setActive call refreshes the status bar and settings panel.
     // Saves the previous active context before overwriting so the panel can show it.
+    // When aiContext.autoPromoteOnSwitch is on (default), the outgoing primary is
+    // also pushed onto the secondary stack with LRU eviction respecting pins.
     const trackedWsState = {
         get:    (...a) => wsState.get(...a),
         update: async (key, value) => {
+            let outgoing = null;
             if (key === ACTIVE_KEY) {
                 const current = wsState.get(ACTIVE_KEY);
-                if (current && current !== value) await wsState.update(PREVIOUS_KEY, current);
+                if (current && current !== value) {
+                    outgoing = current;
+                    await wsState.update(PREVIOUS_KEY, current);
+                }
             }
             await wsState.update(key, value);
-            if (key === ACTIVE_KEY) { updateStatusBar(); settingsView.refresh(); }
+            if (key === ACTIVE_KEY) {
+                if (outgoing) await doAutoPromote(trackedWsState, outgoing, value);
+                updateStatusBar();
+                settingsView.refresh();
+            }
         },
     };
 
@@ -396,6 +480,7 @@ function activate(context) {
         () => getPrevious(trackedWsState),
         {
             getSecondaries: () => getSecondaries(trackedWsState),
+            getPinned: () => getPinned(trackedWsState),
             switchToPrev: async () => {
                 const prev = getPrevious(trackedWsState);
                 if (!prev) return;
@@ -409,6 +494,11 @@ function activate(context) {
                 await removeSecondary(trackedWsState, name);
                 const active = getActive(trackedWsState);
                 if (active) injectAndApplyPerms(dir, active, trackedWsState);
+                settingsView.refresh();
+            },
+            togglePinSecondary: async (name) => {
+                if (!name) return;
+                await togglePinSecondary(trackedWsState, name);
                 settingsView.refresh();
             },
             manageRemovalCommands: async () => {
@@ -1304,9 +1394,34 @@ function activate(context) {
             return;
         }
         await setSecondaries(trackedWsState, []);
+        await setPinned(trackedWsState, []);
         if (active) injectAndApplyPerms(dir, active, trackedWsState);
         settingsView.refresh();
         vscode.window.showInformationMessage('Secondary contexts cleared.');
+    });
+
+    // ── AI: Toggle Secondary Pin ─────────────────────────────────────────────
+    const togglePinCmd = vscode.commands.registerCommand('ai.toggleSecondaryPin', async () => {
+        const cur = getSecondaries(trackedWsState);
+        if (cur.length === 0) {
+            vscode.window.showInformationMessage('No secondary contexts to pin.');
+            return;
+        }
+        const pinnedSet = new Set(getPinned(trackedWsState));
+        const pick = await vscode.window.showQuickPick(
+            cur.map(name => ({
+                label: `${pinnedSet.has(name) ? '$(pinned) ' : '$(pin) '}${name}`,
+                description: pinnedSet.has(name) ? 'pinned (click to unpin)' : 'unpinned (click to pin)',
+                _name: name,
+            })),
+            { placeHolder: 'Toggle pin on which secondary?' }
+        );
+        if (!pick) return;
+        await togglePinSecondary(trackedWsState, pick._name);
+        settingsView.refresh();
+        vscode.window.showInformationMessage(
+            `[${pick._name}] ${getPinned(trackedWsState).includes(pick._name) ? 'pinned' : 'unpinned'}.`
+        );
     });
 
     // ── Consolidate permissions at startup ──────────────────────────────────
@@ -1378,7 +1493,7 @@ function activate(context) {
     context.subscriptions.push(
         configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
         deleteCtx, cleanUp, restoreCtx, reinjectCmd,
-        addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd,
+        addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd, togglePinCmd,
         watcher, claudeWatcher, codexWatcher
     );
 }

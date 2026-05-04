@@ -2,7 +2,7 @@
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
   "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "publisher": "local",
   "scripts": {
     "test": "node test/run-unit.js"
@@ -89,6 +89,10 @@
       {
         "command": "ai.clearSecondaryContexts",
         "title": "AI: Clear Secondary Contexts"
+      },
+      {
+        "command": "ai.toggleSecondaryPin",
+        "title": "AI: Toggle Pin on Secondary Context"
       }
     ],
     "keybindings": [
@@ -186,6 +190,18 @@
           "minimum": 1,
           "maximum": 200,
           "description": "Maximum number of recent actions to keep in context history."
+        },
+        "aiContext.autoPromoteOnSwitch": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the active context switches, push the outgoing primary onto the secondary stack so the AI keeps awareness of recently visited projects. LRU eviction respects pinned secondaries."
+        },
+        "aiContext.maxSecondaryContexts": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Maximum number of secondary contexts kept attached to the primary. When the cap is exceeded the least recently used non-pinned secondary is evicted."
         }
       }
     }
