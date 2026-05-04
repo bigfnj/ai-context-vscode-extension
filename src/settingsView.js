@@ -82,7 +82,14 @@ class SettingsViewProvider {
 
         const removalCount = listRemovalCommands(perms.allow).length;
 
-        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, version: VERSION });
+        const secondariesList = (this._actions.getSecondaries ? this._actions.getSecondaries() : [])
+            .filter(n => n && n !== active)
+            .map(name => {
+                const ctx = loadContext(dir, name);
+                return { name, root: ctx.root || '' };
+            });
+
+        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION });
     }
 
     async _handleMessage(msg) {
@@ -214,6 +221,14 @@ class SettingsViewProvider {
                 this.refresh();
                 break;
             }
+            case 'addSecondary': {
+                if (this._actions.addSecondary) await this._actions.addSecondary();
+                break;
+            }
+            case 'removeSecondary': {
+                if (this._actions.removeSecondary) await this._actions.removeSecondary(msg.name);
+                break;
+            }
         }
     }
 
@@ -300,6 +315,15 @@ select:focus{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}
 select:disabled{opacity:.5;cursor:not-allowed}
 /* Previous context card */
 .prev-card{border:1px dashed var(--vscode-widget-border,rgba(255,255,255,.1));border-radius:4px;padding:8px 12px;margin-top:6px;opacity:.7}
+.sec-list{margin-top:6px;padding:6px 10px;background:var(--vscode-editor-inactiveSelectionBackground,rgba(255,255,255,.04));border-radius:4px}
+.sec-list-hdr{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vscode-descriptionForeground);margin-bottom:4px}
+.sec-empty{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;padding:2px 0}
+.sec-chip{display:inline-flex;align-items:center;background:var(--vscode-input-background,#3c3c3c);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:10px;padding:2px 4px 2px 8px;margin:2px 4px 2px 0;font-size:11px;max-width:100%}
+.sec-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
+.sec-chip-rm{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;margin-left:4px}
+.sec-chip-rm:hover{color:var(--vscode-errorForeground,#f48771)}
+.sec-chip-add{background:none;border:1px dashed var(--vscode-input-border,rgba(255,255,255,.15));color:var(--vscode-descriptionForeground);border-radius:10px;padding:2px 8px;margin:2px 0;font-size:11px;cursor:pointer}
+.sec-chip-add:hover{background:var(--vscode-input-background,#3c3c3c);color:var(--vscode-foreground)}
 .prev-label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--vscode-descriptionForeground);margin-bottom:3px}
 .prev-name{font-size:12px;font-weight:500;color:var(--vscode-foreground);margin-bottom:1px}
 .prev-root{font-size:10px;color:var(--vscode-descriptionForeground);margin-bottom:6px;word-break:break-all}
@@ -313,7 +337,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, version: '' };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '' };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -341,8 +365,9 @@ function fmt(iso) {
 }
 
 function render() {
-    const { active, previous, contexts, settings, perms, version } = S;
+    const { active, previous, contexts, settings, perms, version, secondaries } = S;
     const activeCtx   = contexts.find(c => c.name === active);
+    const secList     = Array.isArray(secondaries) ? secondaries : [];
     const agents      = settings.agents || ['claude','codex','copilot'];
     const claudePerms  = perms.allow || [];
     const codexTrust   = perms.codex  || 'trusted';
@@ -355,6 +380,20 @@ function render() {
             <div class="prev-name">\${esc(previous.name)}</div>
             <div class="prev-root">\${esc(previous.root)}</div>
             <button class="sec" onclick="send('switchToPrev')">⇄ Make Active</button>
+        </div>\` : '';
+
+    const secondariesBlock = active ? \`
+        <div class="sec-list">
+            <div class="sec-list-hdr">Secondary contexts (\${secList.length})</div>
+            \${secList.length
+                ? secList.map(s => \`
+                    <div class="sec-chip">
+                        <span class="sec-chip-name" title="\${esc(s.root)}">\${esc(s.name)}</span>
+                        <button class="sec-chip-rm" title="Remove secondary" onclick="removeSec('\${esc(s.name)}')">×</button>
+                    </div>\`).join('')
+                : '<div class="sec-empty">none</div>'
+            }
+            <button class="sec-chip-add" onclick="send('addSecondary')">+ Add secondary</button>
         </div>\` : '';
 
     const permsBody = active ? \`
@@ -411,7 +450,7 @@ function render() {
                     <div class="btn-row">
                         <button onclick="send('reinject')">↺ Reinject</button>
                         <button class="sec" onclick="send('setActive')">⇄ Switch</button>
-                    </div></div>\${prevCard}\`
+                    </div></div>\${secondariesBlock}\${prevCard}\`
                 : \`<div class="no-active">No active context</div>
                    <button onclick="send('setActive')">Set Active</button>\${prevCard}\`
         ) +
@@ -508,6 +547,7 @@ function renderRemovalButton() {
 }
 
 function manageRemovals(){ vscode.postMessage({type:'manageRemovalCommands'}); }
+function removeSec(name){ vscode.postMessage({type:'removeSecondary', name}); }
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function send(type, data){ vscode.postMessage({type, ...data}); }

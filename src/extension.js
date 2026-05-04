@@ -28,6 +28,7 @@ const {
 
 const {
     autoInject,
+    autoInjectMulti,
     autoInjectCodexBootstrap,
     clearCodexBootstrap,
     clearInjectionForContext,
@@ -37,8 +38,9 @@ const {
 } = require('./inject');
 const { getCliPath, buildPrompt, extractContextUpdate, stripContextUpdate, runWithClaude } = require('./claude');
 
-const ACTIVE_KEY   = 'ai.activeContext';
-const PREVIOUS_KEY = 'ai.previousContext';
+const ACTIVE_KEY    = 'ai.activeContext';
+const PREVIOUS_KEY  = 'ai.previousContext';
+const SECONDARY_KEY = 'ai.secondaryContexts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -52,6 +54,30 @@ function getPrevious(wsState) {
 
 async function setActive(wsState, name) {
     return wsState.update(ACTIVE_KEY, name);
+}
+
+function getSecondaries(wsState) {
+    const v = wsState.get(SECONDARY_KEY);
+    return Array.isArray(v) ? v.filter(n => typeof n === 'string' && n) : [];
+}
+
+async function setSecondaries(wsState, names) {
+    const clean = Array.isArray(names) ? [...new Set(names.filter(n => typeof n === 'string' && n))] : [];
+    return wsState.update(SECONDARY_KEY, clean);
+}
+
+async function addSecondary(wsState, name) {
+    if (!name) return;
+    const active = wsState.get(ACTIVE_KEY);
+    if (name === active) return;
+    const cur = getSecondaries(wsState);
+    if (cur.includes(name)) return;
+    return setSecondaries(wsState, [...cur, name]);
+}
+
+async function removeSecondary(wsState, name) {
+    const cur = getSecondaries(wsState);
+    return setSecondaries(wsState, cur.filter(n => n !== name));
 }
 
 function getCfg() {
@@ -146,7 +172,7 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
         if (matched !== previous) {
             setActive(wsState, matched);
             bootstrapFromGit(dir, matched);
-            injectAndApplyPerms(dir, matched);
+            injectAndApplyPerms(dir, matched, wsState);
             if (options.notify !== false) {
                 notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
             }
@@ -155,7 +181,7 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
     }
 
     if (options.fallbackPrevious && previous) {
-        injectAndApplyPerms(dir, previous);
+        injectAndApplyPerms(dir, previous, wsState);
         return previous;
     }
 
@@ -246,9 +272,18 @@ async function createContextWithRoot(dir, name) {
 
 // ── Permissions ───────────────────────────────────────────────────────────────
 
-function injectAndApplyPerms(dir, name) {
+function injectAndApplyPerms(dir, name, wsStateRef) {
     const ctx = loadContext(dir, name);
-    const result = autoInject(ctx);
+    // wsStateRef is optional — if provided we layer in secondary contexts; if
+    // omitted we fall back to single-context behavior (matches old call sites).
+    let result;
+    if (wsStateRef) {
+        const secondaryNames = getSecondaries(wsStateRef).filter(n => n !== name);
+        const secondaries = secondaryNames.map(n => loadContext(dir, n)).filter(c => c && c.p);
+        result = autoInjectMulti(ctx, secondaries);
+    } else {
+        result = autoInject(ctx);
+    }
     if (ctx.perms) {
         const allow        = ctx.perms.allow || [];
         const codexTrust   = ctx.perms.codex || 'trusted';
@@ -279,10 +314,16 @@ function activate(context) {
     // The file watcher only fires for events that occur while the extension is
     // active. Sidecars written before activation (or during a watcher hiccup,
     // common on WSL inotify) would otherwise sit forever and AGENTS.md / CLAUDE.md
-    // would re-inject from stale state. This runs once at activation.
+    // would re-inject from stale state. This runs once at activation. The same
+    // pass also removes the legacy ~/.ai-context/.active file from pre-3.x
+    // versions — current code stores the active context in workspaceState.
     try {
         if (fs.existsSync(dir)) {
             for (const entry of fs.readdirSync(dir)) {
+                if (entry === '.active') {
+                    try { fs.unlinkSync(path.join(dir, entry)); } catch { /* ignore */ }
+                    continue;
+                }
                 if (!entry.endsWith('.json.update')) continue;
                 const full = path.join(dir, entry);
                 try {
@@ -354,12 +395,21 @@ function activate(context) {
         () => getActive(trackedWsState),
         () => getPrevious(trackedWsState),
         {
+            getSecondaries: () => getSecondaries(trackedWsState),
             switchToPrev: async () => {
                 const prev = getPrevious(trackedWsState);
                 if (!prev) return;
                 await setActive(trackedWsState, prev);
-                injectAndApplyPerms(dir, prev);
+                injectAndApplyPerms(dir, prev, trackedWsState);
                 notify(`AI Context: switched to [${prev}]`);
+            },
+            addSecondary: async () => vscode.commands.executeCommand('ai.addSecondaryContext'),
+            removeSecondary: async (name) => {
+                if (!name) return;
+                await removeSecondary(trackedWsState, name);
+                const active = getActive(trackedWsState);
+                if (active) injectAndApplyPerms(dir, active, trackedWsState);
+                settingsView.refresh();
             },
             manageRemovalCommands: async () => {
                 const ctxName = getActive(trackedWsState);
@@ -488,8 +538,12 @@ function activate(context) {
 
         if (!basename.endsWith('.json')) return;
         const changedName = path.basename(uri.fsPath, '.json');
-        if (changedName === getActive(trackedWsState)) {
-            injectAndApplyPerms(dir, changedName);
+        const activeName = getActive(trackedWsState);
+        // Re-inject if the changed context is the primary OR any secondary —
+        // multi-context blocks need a refresh whenever any participating
+        // context's underlying state changes.
+        if (changedName === activeName || getSecondaries(trackedWsState).includes(changedName)) {
+            if (activeName) injectAndApplyPerms(dir, activeName, trackedWsState);
         }
         settingsView.refresh();
     };
@@ -1184,7 +1238,7 @@ function activate(context) {
             vscode.window.showWarningMessage('AI Context: no active context — use "AI: Set Active Context" first.');
             return;
         }
-        const injected = injectAndApplyPerms(dir, name);
+        const injected = injectAndApplyPerms(dir, name, trackedWsState);
         if (!injected) {
             vscode.window.showWarningMessage(`[${name}] root path is missing or invalid — nothing injected.`);
             return;
@@ -1194,6 +1248,65 @@ function activate(context) {
             .map(f => path.basename(f))
             .join(', ');
         vscode.window.showInformationMessage(`[${name}] reinjected into: ${targets}`);
+    });
+
+    // ── AI: Add Secondary Context ────────────────────────────────────────────
+    const addSecondaryCmd = vscode.commands.registerCommand('ai.addSecondaryContext', async () => {
+        const active = getActive(trackedWsState);
+        if (!active) {
+            vscode.window.showWarningMessage('Set an active context first before adding secondaries.');
+            return;
+        }
+        const taken = new Set([active, ...getSecondaries(trackedWsState)]);
+        const candidates = listContexts(dir).filter(n => !taken.has(n));
+        if (candidates.length === 0) {
+            vscode.window.showInformationMessage('No additional contexts available to add as secondary.');
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            candidates.map(name => {
+                const ctx = loadContext(dir, name);
+                return { label: name, description: ctx.root || '' };
+            }),
+            { placeHolder: `Add secondary context to [${active}]` }
+        );
+        if (!pick) return;
+        await addSecondary(trackedWsState, pick.label);
+        injectAndApplyPerms(dir, active, trackedWsState);
+        settingsView.refresh();
+        vscode.window.showInformationMessage(`Secondary context added: [${pick.label}]`);
+    });
+
+    // ── AI: Remove Secondary Context ─────────────────────────────────────────
+    const removeSecondaryCmd = vscode.commands.registerCommand('ai.removeSecondaryContext', async () => {
+        const active = getActive(trackedWsState);
+        const cur = getSecondaries(trackedWsState);
+        if (cur.length === 0) {
+            vscode.window.showInformationMessage('No secondary contexts to remove.');
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            cur.map(name => ({ label: name })),
+            { placeHolder: 'Remove which secondary context?' }
+        );
+        if (!pick) return;
+        await removeSecondary(trackedWsState, pick.label);
+        if (active) injectAndApplyPerms(dir, active, trackedWsState);
+        settingsView.refresh();
+        vscode.window.showInformationMessage(`Secondary context removed: [${pick.label}]`);
+    });
+
+    // ── AI: Clear Secondary Contexts ─────────────────────────────────────────
+    const clearSecondaryCmd = vscode.commands.registerCommand('ai.clearSecondaryContexts', async () => {
+        const active = getActive(trackedWsState);
+        if (getSecondaries(trackedWsState).length === 0) {
+            vscode.window.showInformationMessage('No secondary contexts to clear.');
+            return;
+        }
+        await setSecondaries(trackedWsState, []);
+        if (active) injectAndApplyPerms(dir, active, trackedWsState);
+        settingsView.refresh();
+        vscode.window.showInformationMessage('Secondary contexts cleared.');
     });
 
     // ── Consolidate permissions at startup ──────────────────────────────────
@@ -1264,7 +1377,9 @@ function activate(context) {
 
     context.subscriptions.push(
         configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
-        deleteCtx, cleanUp, restoreCtx, reinjectCmd, watcher, claudeWatcher, codexWatcher
+        deleteCtx, cleanUp, restoreCtx, reinjectCmd,
+        addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd,
+        watcher, claudeWatcher, codexWatcher
     );
 }
 

@@ -157,6 +157,38 @@ function buildInjectionBlock(ctx, storePath) {
     return lines.join('\n');
 }
 
+// Multi-context variant: builds a block carrying N AI_CONTEXT entries (1 primary
+// + 0+ secondary). When N == 1 this returns the same shape as buildInjectionBlock
+// for backward compat. When N > 1 the routing instructions enumerate each
+// context's update path so the AI can write a CTX_UPDATE for whichever context
+// received material work that turn.
+function buildMultiInjectionBlock(contexts, storePathsByName) {
+    const valid = (contexts || []).filter(c => c && c.p);
+    if (valid.length === 0) return '';
+    if (valid.length === 1) {
+        const ctx = valid[0];
+        return buildInjectionBlock(ctx, storePathsByName[ctx.p] || null);
+    }
+    const lines = [];
+    for (const ctx of valid) {
+        lines.push(`${AGENT_CONTEXT_NAME}=${JSON.stringify(buildAgentContext(ctx))}`);
+    }
+    lines.push(
+        `Multiple ${AGENT_CONTEXT_NAME} entries are active. Use the entry whose "p" matches the project area you are working in as authoritative session state. Continue from n; preserve b/d/c/f/h; append only meaningful recent work to a.`
+    );
+    lines.push(
+        `After each response, write a single line \`CTX_UPDATE:{"v":3,"p":"<name>",...}\` for the context that received material updates this turn. Route by "p":`
+    );
+    for (const ctx of valid) {
+        const sp = storePathsByName[ctx.p];
+        if (sp) lines.push(`  - p="${ctx.p}" -> ${sp}.update`);
+    }
+    lines.push(
+        `The extension reads the .update sidecar, merges into the matching ${AGENT_CONTEXT_NAME} store, and deletes the sidecar. Omit CTX_UPDATE for any context that did not change.`
+    );
+    return lines.join('\n');
+}
+
 function findMarkedRange(content, startMarker, endMarker) {
     const start = content.indexOf(startMarker);
     if (start === -1) return null;
@@ -310,13 +342,25 @@ function getValidContextRoot(ctx) {
 // Injects context into all configured agent files inside ctx.root.
 // Optionally updates .gitignore if aiContext.autoGitignore is enabled.
 function autoInject(ctx) {
-    const root    = getValidContextRoot(ctx);
+    return autoInjectMulti(ctx, []);
+}
+
+// Injects a primary context plus 0+ secondary contexts into the primary's
+// project root. Secondary contexts contribute their AI_CONTEXT entries but
+// do NOT control the injection target — that is always the primary's root.
+function autoInjectMulti(primaryCtx, secondaryCtxs) {
+    const root = getValidContextRoot(primaryCtx);
     if (!root) return false;
 
-    const storePath = ctx.p ? path.join(getCtxDir(), `${ctx.p}.json`) : null;
-    const block   = buildInjectionBlock(ctx, storePath);
-    const targets = getInjectionTargets(root);
+    const ctxDir = getCtxDir();
+    const allCtxs = [primaryCtx, ...(secondaryCtxs || []).filter(c => c && c.p && c.p !== primaryCtx.p)];
+    const storePaths = {};
+    for (const c of allCtxs) {
+        if (c.p) storePaths[c.p] = path.join(ctxDir, `${c.p}.json`);
+    }
 
+    const block = buildMultiInjectionBlock(allCtxs, storePaths);
+    const targets = getInjectionTargets(root);
     for (const filePath of targets) {
         injectIntoFile(filePath, block);
     }
@@ -353,6 +397,7 @@ module.exports = {
     getCodexTargets,
     buildAgentContext,
     buildInjectionBlock,
+    buildMultiInjectionBlock,
     buildCodexBootstrapBlock,
     findInjectionRange,
     getGitignoreRoot,
@@ -365,4 +410,5 @@ module.exports = {
     updateGitignore,
     clearInjectionForContext,
     autoInject,
+    autoInjectMulti,
 };
