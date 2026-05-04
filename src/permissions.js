@@ -421,12 +421,84 @@ function removeCodexGranularSection(content) {
 
 // ── Removal command detection ─────────────────────────────────────────────────
 
+// Patterns for commands the extension must never auto-allow when the
+// "Prevent Removal Capture" toggle is on. Covers OS file removal, database
+// DDL/DML destructives (SQL + NoSQL), container/orchestrator deletes, cloud
+// CLI delete subcommands, IaC destroys, package uninstalls, and git
+// destructives. Designed to match RAW commands (with quoted SQL strings
+// intact) — apply the filter BEFORE generalization so wildcards don't hide
+// destructive content.
 const REMOVAL_PATTERNS = [
+    // ── OS file removal ──
     /^(rm|rmdir|del|erase|remove|wipe|unlink|uninstall|purge)$/i,
-    /^rm\s/i,
-    /^rmdir\s/i,
-    /^del\s/i,
-    /^erase\s/i,
+    /^rm\b/i,
+    /^rmdir\b/i,
+    /^del\b/i,
+    /^erase\b/i,
+    /^unlink\b/i,
+    /^find\b.*\s-delete\b/i,
+    /^find\b.*\s-exec\s+rm\b/i,
+
+    // ── Database destructive (SQL DDL/DML) ──
+    /\bdrop\s+(table|database|schema|index|view|function|procedure|trigger|sequence|tablespace|role|user|owned|materialized\s+view|extension)\b/i,
+    /\btruncate\s+(table|only)\b/i,
+    /\bdelete\s+from\b/i,
+    /\bdrop\s+if\s+exists\b/i,
+    /\balter\s+table\s+\S+\s+drop\b/i, // ALTER TABLE foo DROP COLUMN/CONSTRAINT/...
+
+    // ── NoSQL destructive (MongoDB shell / mongosh) ──
+    /\b(?:db\.\w+\.)?drop\s*\(\s*\)/i,
+    /\b(?:db\.\w+\.)?(deleteMany|deleteOne|remove)\s*\(/i,
+    /\b(?:db\.\w+\.)?dropIndex(?:es)?\s*\(/i,
+    /\bdropDatabase\s*\(/i,
+
+    // ── Redis destructive ──
+    /^redis-cli\b.*\b(flushall|flushdb|del)\b/i,
+    /\b(flushall|flushdb)\b/i,
+
+    // ── Container / orchestrator destructive ──
+    /^(docker|podman)\s+(rm|rmi)\b/i,
+    /^(docker|podman)\s+(volume|network|container|image|stack|service|secret|config|pod|system)\s+(rm|rmi|prune)\b/i,
+    /^kubectl\s+(delete|drain)\b/i,
+    /^helm\s+(delete|uninstall)\b/i,
+
+    // ── Cloud CLIs — delete in subcommand position ──
+    /^aws\s+\S+\s+(delete|rm|rb)\b/i,
+    /^aws\s+s3\s+(rm|rb)\b/i,
+    /^gcloud\s+\S+(\s+\S+)*\s+delete\b/i,
+    /^az\s+\S+(\s+\S+)*\s+delete\b/i,
+
+    // ── IaC destructive ──
+    /^terraform\s+destroy\b/i,
+    /^terraform\s+state\s+rm\b/i,
+    /^terraform\s+apply\s+-destroy\b/i,
+    /^pulumi\s+destroy\b/i,
+
+    // ── Package manager uninstall / remove ──
+    /^(npm|yarn|pnpm)\s+(uninstall|remove|rm)\b/i,
+    /^pip3?\s+uninstall\b/i,
+    /^cargo\s+remove\b/i,
+    /^(apt|apt-get)\s+(remove|purge|autoremove)\b/i,
+    /^dnf\s+(remove|erase|autoremove)\b/i,
+    /^yum\s+(remove|erase)\b/i,
+    /^brew\s+(uninstall|remove)\b/i,
+    /^pacman\s+-R/i,
+
+    // ── Git destructive / history-rewriting ──
+    /^git\s+rm\b/i,
+    /^git\s+reset\s+--hard\b/i,
+    /^git\s+clean\s+-[a-z]*[fdx]/i,
+    /^git\s+(branch|tag)\s+-[Dd]\b/i,
+    /^git\s+push\b.*\s(?:-f|--force|--force-with-lease|--delete)\b/i,
+    /^git\s+update-ref\s+-d\b/i,
+    /^git\s+filter-branch\b/i,
+    /^git\s+filter-repo\b/i,
+
+    // ── Generic destructive verbs as standalone commands ──
+    /^drop\b/i,
+    /^destroy\b/i,
+    /^truncate\b/i,
+    /^wipe\b/i,
 ];
 
 function isRemovalCommand(cmdStr) {

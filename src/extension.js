@@ -1491,23 +1491,24 @@ function activate(context) {
         const currentAllow = readClaudeSettings().permissions?.allow || [];
         const ctx          = loadContext(dir, active);
         const stored       = ctx.perms?.allow || [];
-        const uncovered    = currentAllow.filter(p => !isClaudePermCovered(p, stored));
+        let   uncovered    = currentAllow.filter(p => !isClaudePermCovered(p, stored));
+        if (uncovered.length === 0) return;
+        // Filter the RAW entries before generalization so destructive content
+        // hidden inside quoted args (e.g. `Bash(psql -c "DROP TABLE foo")`)
+        // gets caught — generalize would otherwise replace the SQL with a
+        // wildcard and the filter would never see it.
+        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
+        uncovered = applyRemovalFilter(uncovered, preventRemoval);
         if (uncovered.length === 0) return;
         const newPerms = [];
         for (const raw of uncovered) {
             const g = generalizeClaudePerm(raw, ctx.root);
             if (!isClaudePermCovered(g, [...stored, ...newPerms])) newPerms.push(g);
         }
-        // Honor the Prevent Removal Capture toggle across every capture path,
-        // including this one. If a removal command (rm/del/erase/...) somehow
-        // landed in Claude's settings, we still won't propagate it into the
-        // per-context allow list when the toggle is on.
-        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
-        const filtered = applyRemovalFilter(newPerms, preventRemoval);
-        if (filtered.length === 0) return;
-        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...filtered] } });
+        if (newPerms.length === 0) return;
+        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...newPerms] } });
         settingsView.refresh();
-        notify(`AI Context: captured ${filtered.length} new permission${filtered.length !== 1 ? 's' : ''} for [${active}]`);
+        notify(`AI Context: captured ${newPerms.length} new permission${newPerms.length !== 1 ? 's' : ''} for [${active}]`);
     };
     claudeWatcher.onDidChange(syncClaudePerms);
     claudeWatcher.onDidCreate(syncClaudePerms);
@@ -1600,6 +1601,11 @@ function activate(context) {
         const ctx     = loadContext(dir, active);
         const root    = ctx.root || '';
         const candidates = new Set();
+        // Read preventRemoval up-front so the per-line check below can drop
+        // destructive commands at the RAW step — before generalization replaces
+        // SQL strings inside quoted args (e.g. `psql -c "DROP TABLE foo"`)
+        // with wildcards that hide the destructive content.
+        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
         // Reading partial last line is fine — the next change event will
         // re-process from where we are when Codex has flushed the rest. For
         // simplicity we ignore unterminated tails and only parse complete lines.
@@ -1615,6 +1621,7 @@ function activate(context) {
             const cmd = extractBashCommandFromCodexExec(pl.command);
             if (!cmd) continue;
             if (!isRuleSafeCommand(cmd)) continue;
+            if (preventRemoval && isRemovalCommand(cmd)) continue; // filter raw before generalize
             const generalized = generalizeClaudePerm(`Bash(${cmd})`, root);
             if (generalized) candidates.add(generalized);
         }
@@ -1625,7 +1632,9 @@ function activate(context) {
 
         if (candidates.size === 0) return;
 
-        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
+        // Belt-and-suspenders: rerun the filter on the generalized set in case
+        // generalization produced a destructive shape from non-destructive raw
+        // (shouldn't happen but cheap to guard).
         const filtered = applyRemovalFilter(Array.from(candidates), preventRemoval);
         const stored   = (ctx.perms && ctx.perms.allow) || [];
         const newPerms = [];
