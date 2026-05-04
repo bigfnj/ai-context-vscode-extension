@@ -439,6 +439,37 @@ function activate(context) {
 
     syncCodexBootstrap();
 
+    // ── Codex availability probe — checks both the CLI binary on PATH and the
+    // installed VS Code Codex extension. Either is enough; both is fine. Used
+    // by the sandbox toggle to surface a soft warning only when NEITHER path
+    // is available, since the .codex/config.toml write is valid for either
+    // installation method.
+    function probeCodexVSCodeExtension() {
+        try {
+            const exts = vscode.extensions.all || [];
+            const codex = exts.find(e => {
+                const id   = (e.id || '').toLowerCase();
+                const name = (e.packageJSON && e.packageJSON.name || '').toLowerCase();
+                return id.includes('codex') || name.includes('codex');
+            });
+            if (!codex) return { ok: false, error: 'Codex VS Code extension not installed' };
+            const id  = codex.id;
+            const ver = codex.packageJSON && codex.packageJSON.version;
+            return { ok: true, source: 'vscode-extension', id, version: ver };
+        } catch (err) {
+            return { ok: false, error: `extension probe failed: ${err.message}` };
+        }
+    }
+
+    async function probeCodex() {
+        const { probeCodexBinary } = require('./permissions');
+        const cli = await probeCodexBinary();
+        if (cli.ok) return { ok: true, source: 'cli', detail: 'codex CLI on PATH' };
+        const vsx = probeCodexVSCodeExtension();
+        if (vsx.ok) return { ok: true, source: 'vscode-extension', detail: `${vsx.id}${vsx.version ? '@' + vsx.version : ''}` };
+        return { ok: false, error: `${cli.error}; ${vsx.error}` };
+    }
+
     // ── Status bar — shows active context name, click to switch ──────────────
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
     statusBar.command = 'ai.setActiveContext';
@@ -486,6 +517,7 @@ function activate(context) {
         {
             getSecondaries: () => getSecondaries(trackedWsState),
             getPinned: () => getPinned(trackedWsState),
+            probeCodex: () => probeCodex(),
             switchToPrev: async () => {
                 const prev = getPrevious(trackedWsState);
                 if (!prev) return;
@@ -1118,11 +1150,10 @@ function activate(context) {
                         perms: { ...current.perms, sandboxMode: enabling },
                     });
                     if (enabling) {
-                        const { probeCodexBinary } = require('./permissions');
-                        probeCodexBinary().then(probe => {
+                        probeCodex().then(probe => {
                             if (!probe.ok) {
                                 vscode.window.showWarningMessage(
-                                    `Sandbox config applied for [${ctxName}], but ${probe.error}. Codex may not honor the new mode until the CLI is available.`
+                                    `Sandbox config applied for [${ctxName}], but no Codex installation detected (${probe.error}). Codex may not honor the new mode until the CLI is on PATH or the Codex VS Code extension is installed.`
                                 );
                             }
                         });

@@ -168,7 +168,7 @@ class SettingsViewProvider {
             }
             case 'setCodexSandbox': {
                 if (!active) break;
-                const { applyCodexSandboxMode, probeCodexBinary } = require('./permissions');
+                const { applyCodexSandboxMode } = require('./permissions');
                 const ctx = loadContext(dir, active);
                 const enabling = msg.enabled === true;
                 if (enabling) {
@@ -200,13 +200,14 @@ class SettingsViewProvider {
                     ...ctx,
                     perms: { ...ctx.perms, sandboxMode: enabling },
                 });
-                if (enabling) {
-                    // Soft probe — does NOT revert the config, just warns the user
-                    // that Codex itself may not be installed/runnable.
-                    probeCodexBinary().then(probe => {
+                if (enabling && this._actions.probeCodex) {
+                    // Soft probe — checks both CLI on PATH and installed VS Code
+                    // Codex extension. Either path is enough. Warns only when
+                    // neither is available; never reverts the config.
+                    this._actions.probeCodex().then(probe => {
                         if (!probe.ok) {
                             vscode.window.showWarningMessage(
-                                `Sandbox config applied for [${active}], but ${probe.error}. Codex may not honor the new mode until the CLI is available.`
+                                `Sandbox config applied for [${active}], but no Codex installation detected (${probe.error}). Codex may not honor the new mode until the CLI is on PATH or the Codex VS Code extension is installed.`
                             );
                         }
                     });
