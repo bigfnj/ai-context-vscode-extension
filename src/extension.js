@@ -954,11 +954,31 @@ function activate(context) {
                     );
                     if (confirm !== 'Enable') continue;
                 }
-                saveContext(dir, ctxName, {
-                    ...current,
-                    perms: { ...current.perms, sandboxMode: enabling },
-                });
-                applyCodexSandboxMode(current.root, enabling);
+                const sbResult = applyCodexSandboxMode(current.root, enabling);
+                if (!sbResult.ok) {
+                    saveContext(dir, ctxName, {
+                        ...current,
+                        perms: { ...current.perms, sandboxMode: !enabling },
+                    });
+                    vscode.window.showErrorMessage(
+                        `Sandbox mode ${enabling ? 'enable' : 'disable'} failed — reverted. ${sbResult.error}`
+                    );
+                } else {
+                    saveContext(dir, ctxName, {
+                        ...current,
+                        perms: { ...current.perms, sandboxMode: enabling },
+                    });
+                    if (enabling) {
+                        const { probeCodexBinary } = require('./permissions');
+                        probeCodexBinary().then(probe => {
+                            if (!probe.ok) {
+                                vscode.window.showWarningMessage(
+                                    `Sandbox config applied for [${ctxName}], but ${probe.error}. Codex may not honor the new mode until the CLI is available.`
+                                );
+                            }
+                        });
+                    }
+                }
             }
 
             if (pick._type === 'codex') {

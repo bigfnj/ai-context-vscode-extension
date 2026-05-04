@@ -159,7 +159,7 @@ class SettingsViewProvider {
             }
             case 'setCodexSandbox': {
                 if (!active) break;
-                const { applyCodexSandboxMode } = require('./permissions');
+                const { applyCodexSandboxMode, probeCodexBinary } = require('./permissions');
                 const ctx = loadContext(dir, active);
                 const enabling = msg.enabled === true;
                 if (enabling) {
@@ -173,11 +173,35 @@ class SettingsViewProvider {
                         break;
                     }
                 }
+                const result = applyCodexSandboxMode(ctx.root, enabling);
+                if (!result.ok) {
+                    // Hard failure — config write/verify failed. Force the per-context
+                    // flag back to the actual on-disk state and surface the error.
+                    saveContext(dir, active, {
+                        ...ctx,
+                        perms: { ...ctx.perms, sandboxMode: !enabling },
+                    });
+                    vscode.window.showErrorMessage(
+                        `Sandbox mode ${enabling ? 'enable' : 'disable'} failed — reverted. ${result.error}`
+                    );
+                    this.refresh();
+                    break;
+                }
                 saveContext(dir, active, {
                     ...ctx,
                     perms: { ...ctx.perms, sandboxMode: enabling },
                 });
-                applyCodexSandboxMode(ctx.root, enabling);
+                if (enabling) {
+                    // Soft probe — does NOT revert the config, just warns the user
+                    // that Codex itself may not be installed/runnable.
+                    probeCodexBinary().then(probe => {
+                        if (!probe.ok) {
+                            vscode.window.showWarningMessage(
+                                `Sandbox config applied for [${active}], but ${probe.error}. Codex may not honor the new mode until the CLI is available.`
+                            );
+                        }
+                    });
+                }
                 this.refresh();
                 break;
             }

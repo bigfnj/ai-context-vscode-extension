@@ -542,20 +542,27 @@ function setCodexBashAlias(enabled) {
     }
 }
 
+// Verify-and-revert toggle for project-local Codex sandbox mode.
+// Returns { ok: true } on success, or { ok: false, error: string } on failure.
+// On verification failure the prior file content is restored so the toggle
+// reflects on-disk reality.
 function applyCodexSandboxMode(projectRoot, enabled) {
-    if (!projectRoot) return;
+    if (!projectRoot) return { ok: false, error: 'no projectRoot provided' };
     const configDir  = path.join(projectRoot, '.codex');
     const configPath = path.join(configDir, 'config.toml');
+    const fileExistedBefore = fs.existsSync(configPath);
 
     if (!fs.existsSync(configDir)) {
-        if (!enabled) return;
-        fs.mkdirSync(configDir, { recursive: true });
+        if (!enabled) return { ok: true };
+        try {
+            fs.mkdirSync(configDir, { recursive: true });
+        } catch (err) {
+            return { ok: false, error: `cannot create .codex/: ${err.message}` };
+        }
     }
 
-    const content = fs.existsSync(configPath)
-        ? fs.readFileSync(configPath, 'utf-8') : '';
-
-    const lines   = content.split('\n');
+    const priorContent = fileExistedBefore ? fs.readFileSync(configPath, 'utf-8') : '';
+    const lines   = priorContent.split('\n');
     const keyLine = /^sandbox_mode\s*=/;
     const idx     = lines.findIndex(l => keyLine.test(l));
 
@@ -571,7 +578,60 @@ function applyCodexSandboxMode(projectRoot, enabled) {
             : lines;
     }
 
-    fs.writeFileSync(configPath, updated.join('\n'), 'utf-8');
+    const newContent = updated.join('\n');
+    try {
+        fs.writeFileSync(configPath, newContent, 'utf-8');
+    } catch (err) {
+        return { ok: false, error: `cannot write config: ${err.message}` };
+    }
+
+    // Verify by reading the file back and re-checking the sandbox_mode line.
+    const revert = () => {
+        try {
+            if (!fileExistedBefore) fs.unlinkSync(configPath);
+            else fs.writeFileSync(configPath, priorContent, 'utf-8');
+        } catch { /* best effort */ }
+    };
+
+    let readBack;
+    try {
+        readBack = fs.readFileSync(configPath, 'utf-8');
+    } catch (err) {
+        revert();
+        return { ok: false, error: `cannot read config back: ${err.message}` };
+    }
+
+    const readBackHasFullAccess = readBack
+        .split('\n')
+        .some(l => keyLine.test(l) && l.includes('"danger-full-access"'));
+
+    if (enabled && !readBackHasFullAccess) {
+        revert();
+        return { ok: false, error: 'wrote config but sandbox_mode line not present after readback' };
+    }
+    if (!enabled && readBackHasFullAccess) {
+        revert();
+        return { ok: false, error: 'sandbox_mode line still present after disable' };
+    }
+
+    return { ok: true };
+}
+
+// Soft probe: verify the codex CLI binary exists and runs. Returns
+// { ok: true } if `codex --version` exits cleanly within 2s, otherwise
+// { ok: false, error: string }. Callers should use this for warning UX
+// only — config validity does not depend on the binary being installed.
+function probeCodexBinary() {
+    return new Promise(resolve => {
+        const { execFile } = require('child_process');
+        execFile('codex', ['--version'], { timeout: 2000 }, (err) => {
+            if (!err) return resolve({ ok: true });
+            if (err.code === 'ENOENT')  return resolve({ ok: false, error: 'codex CLI not on PATH' });
+            if (err.killed)             return resolve({ ok: false, error: 'codex --version timed out after 2s' });
+            const first = (err.message || '').split('\n')[0].slice(0, 160);
+            return resolve({ ok: false, error: `codex --version exited with: ${first}` });
+        });
+    });
 }
 
 function applyCodexFullAuto(enabled) {
@@ -729,6 +789,7 @@ module.exports = {
     listRemovalCommands,
     removeRemovalCommandFromClaudeGlobal,
     removeRemovalCommandFromCodex,
+    probeCodexBinary,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,
