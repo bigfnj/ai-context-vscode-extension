@@ -325,10 +325,10 @@ select:disabled{opacity:.5;cursor:not-allowed}
 .sec-list-hdr{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--vscode-descriptionForeground);margin-bottom:4px}
 .sec-empty{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;padding:2px 0}
 .sec-chip{display:inline-flex;align-items:center;background:var(--vscode-input-background,#3c3c3c);border:1px solid var(--vscode-input-border,rgba(255,255,255,.15));border-radius:10px;padding:2px 4px 2px 4px;margin:2px 4px 2px 0;font-size:11px;max-width:100%}
-.sec-chip-pinned{border-color:var(--vscode-textLink-foreground,#4fc3f7)}
-.sec-chip-pin{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:11px;line-height:1;padding:0 2px;opacity:.5}
+.sec-chip-pinned{border-color:var(--vscode-textLink-foreground,#4fc3f7);background:rgba(79,195,247,.08)}
+.sec-chip-pin{background:none;border:none;color:var(--vscode-foreground);cursor:pointer;font-size:13px;line-height:1;padding:1px 4px;opacity:.7;border-radius:8px}
 .sec-chip-pin.on{opacity:1;color:var(--vscode-textLink-foreground,#4fc3f7)}
-.sec-chip-pin:hover{opacity:1}
+.sec-chip-pin:hover{opacity:1;background:var(--vscode-toolbar-hoverBackground,rgba(255,255,255,.08))}
 .sec-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;padding:0 4px}
 .sec-chip-rm{background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;margin-left:2px}
 .sec-chip-rm:hover{color:var(--vscode-errorForeground,#f48771)}

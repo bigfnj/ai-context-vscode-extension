@@ -248,7 +248,7 @@ function syncActiveContextForPath(dir, wsState, candidatePath, options = {}) {
             bootstrapFromGit(dir, matched);
             injectAndApplyPerms(dir, matched, wsState);
             if (options.notify !== false) {
-                notify(`AI Context: ${options.action || 'switched to'} [${matched}]`);
+                notify(`AI Context Runner is now tracking [${matched}]`);
             }
         }
         return matched;
