@@ -243,40 +243,84 @@ function buildCodexBootstrapBlock(projectsRoot) {
         '',
         `Projects root: ${root || '(not configured)'}`,
         '',
-        'When the user asks to move, cd, switch, open, or start work in a project under this root:',
-        '1. Resolve the target project directory.',
-        '2. Immediately read the nearest AGENTS.md from that target directory before answering or doing project work.',
-        `3. If AGENTS.md contains ${AGENT_CONTEXT_NAME}, treat it as the authoritative session state.`,
-        '4. If the target is inside a nested Git repository, prefer the nearest AGENTS.md in that repository.',
-        `5. After switching, run this shell command so the VS Code AI Context extension auto-updates: echo "$PWD" > ${cwdFile}`,
+        '## When the user asks to move, cd, switch, open, or start work in a project',
         '',
-        'A shell cd, tool workdir change, or VS Code terminal cwd change does not reload an already-running Codex conversation automatically.',
-        'The target project AGENTS.md is the handoff source after a project switch.',
+        'Your VERY FIRST tool call MUST be to read AGENTS.md from the target project',
+        'directory. Do not run `git status`, `ls`, `pwd`, or any other discovery command',
+        'first. Do not message the user. Do not summarize the move. Read AGENTS.md.',
+        '',
+        '1. Resolve the target project directory by matching the user\'s phrase against',
+        `   subdirectories of ${root || '(projects root)'}.`,
+        '2. Read the nearest AGENTS.md from that target directory.',
+        `3. If that AGENTS.md contains ${AGENT_CONTEXT_NAME}=, treat the JSON as the`,
+        '   authoritative session state. Continue from `n`; preserve `b/d/c/f/h`;',
+        '   append meaningful recent work to `a`.',
+        '4. If the target is inside a nested Git repository, prefer the nearest',
+        '   AGENTS.md in that repository.',
+        `5. After step 2 succeeds, run: \`echo "$PWD" > ${cwdFile}\``,
+        '   This signals the VS Code AI Context extension to update the active context.',
+        '6. Only after the AGENTS.md read AND the .cwd write are complete, proceed with',
+        '   any orientation work the user actually asked for (status, summary, etc.).',
+        '',
+        '## Why this ordering matters',
+        '',
+        'A shell `cd`, tool workdir change, or VS Code terminal cwd change does NOT',
+        'reload an already-running Codex conversation. AGENTS.md is the only handoff',
+        'channel. If you skip step 2 you will be acting on stale context.',
+        '',
+        'If AGENTS.md does not exist in the target directory, say so explicitly and',
+        'ask the user how they want to proceed — do not silently fall back to working',
+        'without project context.',
     ].join('\n');
 }
 
+// Returns the list of paths where the bootstrap block should be installed.
+// Two locations because Codex only walks CWD upward to find AGENTS.md at session
+// start, and users start sessions from different places:
+//   - <projectsRoot>/AGENTS.md  (catches sessions started in/under projects root)
+//   - $HOME/AGENTS.md           (catches sessions started anywhere under home,
+//                                including the home dir itself)
+// Deduped via Set when projectsRoot equals home.
+function getCodexBootstrapTargets(projectsRoot) {
+    const targets = new Set();
+    const root = normalizePath(projectsRoot || '');
+    if (root) targets.add(path.join(root, 'AGENTS.md'));
+    const home = require('os').homedir();
+    if (home) targets.add(path.join(home, 'AGENTS.md'));
+    return [...targets];
+}
+
+// Backwards-compatible single-target getter — returns the projects-root path.
+// Kept exported for callers (and external scripts) that hardcoded the old name.
 function getCodexBootstrapTarget(projectsRoot) {
     const root = normalizePath(projectsRoot || '');
     return root ? path.join(root, 'AGENTS.md') : null;
 }
 
 function autoInjectCodexBootstrap(projectsRoot) {
-    const target = getCodexBootstrapTarget(projectsRoot);
-    if (!target) return false;
-    try {
-        const root = path.dirname(target);
-        if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return false;
-        injectMarkedBlock(target, buildCodexBootstrapBlock(projectsRoot), BOOTSTRAP_START, BOOTSTRAP_END);
-        return true;
-    } catch {
-        return false;
+    const targets = getCodexBootstrapTargets(projectsRoot);
+    if (targets.length === 0) return false;
+    let injected = false;
+    const block = buildCodexBootstrapBlock(projectsRoot);
+    for (const target of targets) {
+        try {
+            const dir = path.dirname(target);
+            if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+            injectMarkedBlock(target, block, BOOTSTRAP_START, BOOTSTRAP_END);
+            injected = true;
+        } catch {
+            // Skip this target; keep going so the other still gets the block.
+        }
     }
+    return injected;
 }
 
 function clearCodexBootstrap(projectsRoot) {
-    const target = getCodexBootstrapTarget(projectsRoot);
-    if (!target) return false;
-    clearMarkedBlock(target, BOOTSTRAP_START, BOOTSTRAP_END);
+    const targets = getCodexBootstrapTargets(projectsRoot);
+    if (targets.length === 0) return false;
+    for (const target of targets) {
+        try { clearMarkedBlock(target, BOOTSTRAP_START, BOOTSTRAP_END); } catch { /* ignore */ }
+    }
     return true;
 }
 
@@ -405,6 +449,7 @@ module.exports = {
     injectIntoFile,
     clearInjection,
     getCodexBootstrapTarget,
+    getCodexBootstrapTargets,
     autoInjectCodexBootstrap,
     clearCodexBootstrap,
     updateGitignore,

@@ -254,7 +254,8 @@ function testCodexBootstrapInjection() {
     assert.strictEqual(count(bootstrapped, inject.BOOTSTRAP_START), 1);
     assert.strictEqual(count(bootstrapped, inject.BOOTSTRAP_END), 1);
     assert.ok(bootstrapped.includes(`Projects root: ${dir}`));
-    assert.ok(bootstrapped.includes('Immediately read the nearest AGENTS.md'));
+    assert.ok(bootstrapped.includes('Read the nearest AGENTS.md from that target directory'));
+    assert.ok(bootstrapped.includes('Your VERY FIRST tool call MUST be to read AGENTS.md'));
 
     inject.injectIntoFile(file, 'context block');
     const withContext = fs.readFileSync(file, 'utf8');
