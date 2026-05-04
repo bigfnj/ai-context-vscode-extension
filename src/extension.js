@@ -275,6 +275,27 @@ function activate(context) {
     const dir     = getCtxDir();
     const wsState = context.workspaceState;
 
+    // ── Sweep: consume any orphan *.json.update sidecars left by previous sessions.
+    // The file watcher only fires for events that occur while the extension is
+    // active. Sidecars written before activation (or during a watcher hiccup,
+    // common on WSL inotify) would otherwise sit forever and AGENTS.md / CLAUDE.md
+    // would re-inject from stale state. This runs once at activation.
+    try {
+        if (fs.existsSync(dir)) {
+            for (const entry of fs.readdirSync(dir)) {
+                if (!entry.endsWith('.json.update')) continue;
+                const full = path.join(dir, entry);
+                try {
+                    const name = entry.slice(0, -'.json.update'.length);
+                    const update = extractContextUpdate(fs.readFileSync(full, 'utf8'));
+                    if (!update) { fs.unlinkSync(full); continue; }
+                    saveContext(dir, name, { ...loadContext(dir, name), ...update });
+                    fs.unlinkSync(full);
+                } catch { /* skip this sidecar, keep sweeping */ }
+            }
+        }
+    } catch { /* ignore — sweep is best-effort */ }
+
     const hasCodexLikeAgent = () => getAgents().some(agent => agent === 'codex' || agent === 'kilo');
     const syncCodexBootstrap = () => {
         const projectsRoot = getProjectsRoot();
