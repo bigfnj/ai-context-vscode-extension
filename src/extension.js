@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
 
 const {
     getCtxDir,
@@ -1498,10 +1498,16 @@ function activate(context) {
             const g = generalizeClaudePerm(raw, ctx.root);
             if (!isClaudePermCovered(g, [...stored, ...newPerms])) newPerms.push(g);
         }
-        if (newPerms.length === 0) return;
-        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...newPerms] } });
+        // Honor the Prevent Removal Capture toggle across every capture path,
+        // including this one. If a removal command (rm/del/erase/...) somehow
+        // landed in Claude's settings, we still won't propagate it into the
+        // per-context allow list when the toggle is on.
+        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
+        const filtered = applyRemovalFilter(newPerms, preventRemoval);
+        if (filtered.length === 0) return;
+        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...filtered] } });
         settingsView.refresh();
-        notify(`AI Context: captured ${newPerms.length} new permission${newPerms.length !== 1 ? 's' : ''} for [${active}]`);
+        notify(`AI Context: captured ${filtered.length} new permission${filtered.length !== 1 ? 's' : ''} for [${active}]`);
     };
     claudeWatcher.onDidChange(syncClaudePerms);
     claudeWatcher.onDidCreate(syncClaudePerms);
@@ -1540,9 +1546,12 @@ function activate(context) {
         const rules    = parseCodexRules(readCodexRulesFile());
         const derived  = codexRulesToClaudeAllow(rules);
         if (derived.length === 0) return;
+        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
+        const filtered = applyRemovalFilter(derived, preventRemoval);
+        if (filtered.length === 0) return;
         const ctx      = loadContext(dir, active);
         const stored   = (ctx.perms && ctx.perms.allow) || [];
-        const newPerms = derived.filter(p => !isClaudePermCovered(p, stored));
+        const newPerms = filtered.filter(p => !isClaudePermCovered(p, stored));
         if (newPerms.length === 0) return;
         saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...newPerms] } });
         // Push captured perms into the global Claude allow list too so Claude
@@ -1558,11 +1567,123 @@ function activate(context) {
     // get captured on the next launch (parallels the .json.update sweep).
     syncCodexRules();
 
+    // ── Watch ~/.codex/sessions/**/*.jsonl — auto-harvest commands Codex actually
+    // ran into the active context's perms. Codex doesn't persist "Yes, don't
+    // ask again this session" decisions anywhere on disk; the only signal that
+    // the user lived with a command is that Codex executed it. We tail the
+    // rollout JSONLs, generalize each successful exec via the same wildcard
+    // logic used for Claude perms, respect the preventRemovalCapture toggle,
+    // skip command shapes Codex's prefix_rule grammar can't match, and let the
+    // existing apply pipeline propagate downstream.
+    const codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+    const rolloutOffsets   = new Map(); // filePath -> last consumed byte offset
+
+    const harvestRollout = (uri) => {
+        const active = getActive(trackedWsState);
+        if (!active) return;
+        const filePath = uri.fsPath;
+        let stat;
+        try { stat = fs.statSync(filePath); } catch { return; }
+        const lastOffset = rolloutOffsets.get(filePath) || 0;
+        if (stat.size <= lastOffset) return;
+
+        let chunk = '';
+        try {
+            const fd = fs.openSync(filePath, 'r');
+            const buf = Buffer.alloc(stat.size - lastOffset);
+            fs.readSync(fd, buf, 0, buf.length, lastOffset);
+            fs.closeSync(fd);
+            chunk = buf.toString('utf-8');
+        } catch { return; }
+        rolloutOffsets.set(filePath, stat.size);
+
+        const ctx     = loadContext(dir, active);
+        const root    = ctx.root || '';
+        const candidates = new Set();
+        // Reading partial last line is fine — the next change event will
+        // re-process from where we are when Codex has flushed the rest. For
+        // simplicity we ignore unterminated tails and only parse complete lines.
+        const lines = chunk.split('\n');
+        for (let i = 0; i < lines.length - 1; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            let obj;
+            try { obj = JSON.parse(line); } catch { continue; }
+            if (obj.type !== 'event_msg') continue;
+            const pl = obj.payload || {};
+            if (pl.type !== 'exec_command_end') continue;
+            const cmd = extractBashCommandFromCodexExec(pl.command);
+            if (!cmd) continue;
+            if (!isRuleSafeCommand(cmd)) continue;
+            const generalized = generalizeClaudePerm(`Bash(${cmd})`, root);
+            if (generalized) candidates.add(generalized);
+        }
+        // Roll back the offset by the trailing partial line so the next firing
+        // can re-read it after Codex flushes the rest.
+        const tail = lines[lines.length - 1] || '';
+        if (tail.length > 0) rolloutOffsets.set(filePath, stat.size - Buffer.byteLength(tail, 'utf-8'));
+
+        if (candidates.size === 0) return;
+
+        const preventRemoval = getCfg().get('preventRemovalCapture') === true;
+        const filtered = applyRemovalFilter(Array.from(candidates), preventRemoval);
+        const stored   = (ctx.perms && ctx.perms.allow) || [];
+        const newPerms = [];
+        for (const p of filtered) {
+            if (!isClaudePermCovered(p, [...stored, ...newPerms])) newPerms.push(p);
+        }
+        if (newPerms.length === 0) return;
+
+        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...newPerms] } });
+        // Propagate downstream so Claude, Codex safeCommands, and Codex rules
+        // all reflect the harvested set immediately — same as the Claude/Rules
+        // watchers do.
+        applyClaudePerms(newPerms);
+        const baseSafe = (ctx.perms && ctx.perms.safeCommands) || [];
+        applyCodexSafeCommands([...baseSafe, ...deriveSafeCommandsFromAllow(newPerms)]);
+        applyCodexRulesFile(claudeAllowToCodexRules(newPerms));
+        settingsView.refresh();
+        notify(`AI Context: harvested ${newPerms.length} command${newPerms.length !== 1 ? 's' : ''} from Codex session into [${active}]`);
+    };
+
+    const codexRolloutWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(codexSessionsDir), '**/rollout-*.jsonl')
+    );
+    codexRolloutWatcher.onDidChange(harvestRollout);
+    codexRolloutWatcher.onDidCreate(harvestRollout);
+
+    // Activation sweep — pick up the most recent rollouts that grew while the
+    // extension was offline. Cap at the last 3 to keep activation fast; older
+    // sessions are typically already represented in default.rules / per-context
+    // perms and dedup will short-circuit anyway.
+    try {
+        if (fs.existsSync(codexSessionsDir)) {
+            const found = [];
+            const walk = (d, depth) => {
+                if (depth > 4) return;
+                let entries;
+                try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+                for (const e of entries) {
+                    const full = path.join(d, e.name);
+                    if (e.isDirectory()) walk(full, depth + 1);
+                    else if (e.isFile() && e.name.startsWith('rollout-') && e.name.endsWith('.jsonl')) {
+                        try { found.push({ path: full, mtime: fs.statSync(full).mtimeMs }); } catch {}
+                    }
+                }
+            };
+            walk(codexSessionsDir, 0);
+            found.sort((a, b) => b.mtime - a.mtime);
+            for (const r of found.slice(0, 3)) {
+                harvestRollout(vscode.Uri.file(r.path));
+            }
+        }
+    } catch { /* sweep is best-effort */ }
+
     context.subscriptions.push(
         configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
         deleteCtx, cleanUp, restoreCtx, reinjectCmd,
         addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd, togglePinCmd,
-        watcher, claudeWatcher, codexWatcher, codexRulesWatcher
+        watcher, claudeWatcher, codexWatcher, codexRulesWatcher, codexRolloutWatcher
     );
 }
 

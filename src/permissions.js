@@ -617,6 +617,58 @@ function applyCodexSandboxMode(projectRoot, enabled) {
     return { ok: true };
 }
 
+// ── Codex rollout JSONL parsing ─────────────────────────────────────────────
+// Codex writes per-session transcripts to ~/.codex/sessions/<Y>/<M>/<D>/
+// rollout-<TS>-<UUID>.jsonl. Each event_msg.exec_command_end event carries the
+// command Codex actually executed. Auto-capturing those (filtered for shapes
+// that can be safely turned into prefix rules and respecting the
+// preventRemovalCapture toggle) lets us promote commands to persistent
+// per-context perms without the user having to pick "Always allow" each time.
+
+// Codex usually wraps shell commands as ["/bin/bash", "-lc", "<cmd>"]. Returns
+// the inner bash string, or null if the array doesn't fit that shape (which
+// means it's a non-shell exec we can't safely map to a Codex prefix rule).
+function extractBashCommandFromCodexExec(commandArray) {
+    if (!Array.isArray(commandArray) || commandArray.length < 3) return null;
+    const a0 = String(commandArray[0] || '').toLowerCase();
+    if (!a0.endsWith('bash') && !a0.endsWith('/sh') && !a0.endsWith('zsh') && a0 !== 'bash' && a0 !== 'sh') {
+        // Allow paths like /bin/bash, /usr/bin/bash, /bin/sh
+        if (!/(^|\/)(ba|z)?sh$/.test(a0)) return null;
+    }
+    for (let i = 1; i < commandArray.length - 1; i++) {
+        const flag = String(commandArray[i] || '');
+        if (flag === '-c' || flag === '-lc' || flag === '-l' || flag === '-ic') {
+            const cmd = String(commandArray[i + 1] || '').trim();
+            return cmd || null;
+        }
+    }
+    return null;
+}
+
+// Returns true if the command is a shape Codex's prefix-rule grammar can match
+// at runtime. Per the official rules docs, commands using shell metacharacters,
+// env-var prefixes, redirections, substitutions, heredocs, or wildcards are
+// skipped during rule evaluation — capturing those would produce phantom rules
+// that never fire. Mirror that filter at the capture layer.
+function isRuleSafeCommand(cmd) {
+    if (!cmd || typeof cmd !== 'string') return false;
+    if (cmd.length > 240) return false;
+    if (/[|&;`$()<>]/.test(cmd)) return false;            // pipes, control ops, subst, redir
+    if (/^\s*[A-Z_][A-Z0-9_]*=/.test(cmd)) return false;   // env-var prefix
+    if (/<<\s*['"]?\w+['"]?/.test(cmd)) return false;     // heredoc
+    if (/[*?]/.test(cmd)) return false;                    // glob/wildcard
+    return true;
+}
+
+// Filter that drops removal commands when the aiContext.preventRemovalCapture
+// toggle is on. Wraps purgeRemovalCommandsFromAllow so all watchers can use a
+// consistent gate without each repeating the toggle check. Pass the boolean
+// directly so this stays vscode-free (the caller reads the config).
+function applyRemovalFilter(allowEntries, preventRemovalEnabled) {
+    if (!preventRemovalEnabled) return allowEntries;
+    return purgeRemovalCommandsFromAllow(allowEntries);
+}
+
 // ── Codex rules file (~/.codex/rules/default.rules) ──────────────────────────
 // Codex persists "always allow" approvals here as Starlark-format
 // prefix_rule(pattern=[...], decision="allow") entries. We read this so the
@@ -924,6 +976,9 @@ module.exports = {
     claudeAllowToCodexRules,
     formatCodexRule,
     applyCodexRulesFile,
+    extractBashCommandFromCodexExec,
+    isRuleSafeCommand,
+    applyRemovalFilter,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,
