@@ -617,6 +617,58 @@ function applyCodexSandboxMode(projectRoot, enabled) {
     return { ok: true };
 }
 
+// ── Codex rules file (~/.codex/rules/default.rules) ──────────────────────────
+// Codex persists "always allow" approvals here as Starlark-format
+// prefix_rule(pattern=[...], decision="allow") entries. We read this so the
+// extension can capture new persistent approvals into the active context's
+// allow-list (paralleling how ~/.claude/settings.json is watched).
+
+function readCodexRulesFile() {
+    try {
+        const rulesPath = path.join(os.homedir(), '.codex', 'rules', 'default.rules');
+        if (!fs.existsSync(rulesPath)) return '';
+        return fs.readFileSync(rulesPath, 'utf-8');
+    } catch {
+        return '';
+    }
+}
+
+// Parses Codex prefix_rule entries. Handles whitespace flexibility, single or
+// double quotes around tokens, comments (lines starting with #). Ignores any
+// rule shape we don't recognize — Codex's grammar may grow over time.
+function parseCodexRules(content) {
+    if (!content) return [];
+    const rules = [];
+    const re = /prefix_rule\s*\(\s*pattern\s*=\s*\[([^\]]*)\]\s*,\s*decision\s*=\s*["']([a-zA-Z_]+)["']\s*\)/g;
+    let m;
+    while ((m = re.exec(content)) !== null) {
+        const tokens = m[1]
+            .split(',')
+            .map(s => s.trim().replace(/^["']|["']$/g, ''))
+            .filter(Boolean);
+        if (tokens.length === 0) continue;
+        rules.push({ pattern: tokens, decision: m[2].toLowerCase() });
+    }
+    return rules;
+}
+
+// Convert allow-decision Codex rules into Claude-format perm entries
+// (Bash(<tokens> *)) so they flow through the existing per-context perms
+// pipeline and downstream sync (applyClaudePerms, deriveSafeCommandsFromAllow).
+// Deny-decision rules are ignored — they don't grant permissions.
+function codexRulesToClaudeAllow(rules) {
+    if (!Array.isArray(rules)) return [];
+    const out = [];
+    for (const r of rules) {
+        if (!r || r.decision !== 'allow') continue;
+        if (!Array.isArray(r.pattern) || r.pattern.length === 0) continue;
+        const cmd = r.pattern.join(' ').trim();
+        if (!cmd) continue;
+        out.push(`Bash(${cmd} *)`);
+    }
+    return out;
+}
+
 // Soft probe: verify the codex CLI binary exists and runs. Returns
 // { ok: true } if `codex --version` exits cleanly within 2s, otherwise
 // { ok: false, error: string }. Callers should use this for warning UX
@@ -790,6 +842,9 @@ module.exports = {
     removeRemovalCommandFromClaudeGlobal,
     removeRemovalCommandFromCodex,
     probeCodexBinary,
+    readCodexRulesFile,
+    parseCodexRules,
+    codexRulesToClaudeAllow,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,

@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow } = require('./permissions');
 
 const {
     getCtxDir,
@@ -1490,11 +1490,43 @@ function activate(context) {
     codexWatcher.onDidChange(syncCodexTrust);
     codexWatcher.onDidCreate(syncCodexTrust);
 
+    // ── Watch ~/.codex/rules/default.rules — capture persistent prefix-rule
+    // approvals into the active context's allow list (parallel to claudeWatcher
+    // for ~/.claude/settings.json). Codex writes here when the user picks the
+    // "always allow" / persist-as-rule option during an escalation prompt.
+    const codexRulesDir = path.join(os.homedir(), '.codex', 'rules');
+    const codexRulesWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(codexRulesDir), 'default.rules')
+    );
+    const syncCodexRules = () => {
+        const active = getActive(trackedWsState);
+        if (!active) return;
+        const rules    = parseCodexRules(readCodexRulesFile());
+        const derived  = codexRulesToClaudeAllow(rules);
+        if (derived.length === 0) return;
+        const ctx      = loadContext(dir, active);
+        const stored   = (ctx.perms && ctx.perms.allow) || [];
+        const newPerms = derived.filter(p => !isClaudePermCovered(p, stored));
+        if (newPerms.length === 0) return;
+        saveContext(dir, active, { ...ctx, perms: { ...ctx.perms, allow: [...stored, ...newPerms] } });
+        // Push captured perms into the global Claude allow list too so Claude
+        // sessions immediately recognize them — symmetric with how Claude
+        // captures land in the per-context allow list.
+        applyClaudePerms(newPerms);
+        settingsView.refresh();
+        notify(`AI Context: captured ${newPerms.length} new Codex rule${newPerms.length !== 1 ? 's' : ''} for [${active}]`);
+    };
+    codexRulesWatcher.onDidChange(syncCodexRules);
+    codexRulesWatcher.onDidCreate(syncCodexRules);
+    // Run once at activation so any rules added while the extension was offline
+    // get captured on the next launch (parallels the .json.update sweep).
+    syncCodexRules();
+
     context.subscriptions.push(
         configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
         deleteCtx, cleanUp, restoreCtx, reinjectCmd,
         addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd, togglePinCmd,
-        watcher, claudeWatcher, codexWatcher
+        watcher, claudeWatcher, codexWatcher, codexRulesWatcher
     );
 }
 
