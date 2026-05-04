@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile } = require('./permissions');
 
 const {
     getCtxDir,
@@ -365,6 +365,11 @@ function injectAndApplyPerms(dir, name, wsStateRef) {
         const sandboxMode  = ctx.perms.sandboxMode === true;
         applyClaudePerms(allow);
         applyCodexSafeCommands([...safeCommands, ...deriveSafeCommandsFromAllow(allow)]);
+        // Push our per-context wildcards back into ~/.codex/rules/default.rules
+        // (additive merge — preserves manual edits and deny rules) so Codex
+        // sessions opened in this context inherit the harvested approvals
+        // without re-prompting. Symmetric with applyClaudePerms.
+        applyCodexRulesFile(claudeAllowToCodexRules(allow));
         applyCodexSandboxMode(ctx.root, sandboxMode);
         if (codexTrust === 'full-auto') {
             applyCodexFullAuto(true);

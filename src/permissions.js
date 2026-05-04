@@ -669,6 +669,82 @@ function codexRulesToClaudeAllow(rules) {
     return out;
 }
 
+// Reverse of codexRulesToClaudeAllow: take Claude-format perm entries from
+// the active context's allow-list and produce { pattern, decision: "allow" }
+// rule objects suitable for writing to ~/.codex/rules/default.rules.
+//
+// Rejects entries Codex's prefix_rule grammar cannot match against:
+//   - Non-Bash entries (WebSearch, Skill(...), etc.)
+//   - Wildcard-everything Bash(*) — too dangerous and grammar-invalid
+//   - Tokens containing shell metacharacters Codex won't evaluate
+//     (per docs: redirections, substitutions, env vars, wildcards inside
+//     a token, etc. — these commands skip rule matching at runtime anyway)
+function claudeAllowToCodexRules(allow) {
+    if (!Array.isArray(allow)) return [];
+    const out = [];
+    for (const raw of allow) {
+        if (typeof raw !== 'string') continue;
+        const m = raw.match(/^Bash\((.+)\)$/);
+        if (!m) continue;
+        // Strip a single trailing wildcard (the per-context convention) but
+        // reject wildcards mid-pattern.
+        const inner = m[1].trim().replace(/\s*\*\s*$/, '').trim();
+        if (!inner) continue; // was Bash(*) alone
+        const tokens = inner.split(/\s+/);
+        if (tokens.length === 0) continue;
+        const safe = tokens.every(t => /^[A-Za-z0-9._/+@:=,-]+$/.test(t));
+        if (!safe) continue;
+        out.push({ pattern: tokens, decision: 'allow' });
+    }
+    return out;
+}
+
+function formatCodexRule(rule) {
+    const pattern = rule.pattern.map(t => `"${t.replace(/"/g, '\\"')}"`).join(', ');
+    return `prefix_rule(pattern=[${pattern}], decision="${rule.decision}")`;
+}
+
+// Additive merge into ~/.codex/rules/default.rules: preserves every existing
+// line (manual user edits, deny rules, anything we don't recognize) and
+// appends any derived rules whose pattern is not already present. Returns
+// the count of newly-written rules.
+function applyCodexRulesFile(rules) {
+    if (!Array.isArray(rules) || rules.length === 0) return 0;
+    const rulesDir  = path.join(os.homedir(), '.codex', 'rules');
+    const rulesPath = path.join(rulesDir, 'default.rules');
+    let existingContent = '';
+    try {
+        if (!fs.existsSync(rulesDir)) fs.mkdirSync(rulesDir, { recursive: true });
+        if (fs.existsSync(rulesPath)) existingContent = fs.readFileSync(rulesPath, 'utf-8');
+    } catch (err) {
+        console.error('Failed to read Codex rules file:', err.message);
+        return 0;
+    }
+
+    const existing = parseCodexRules(existingContent);
+    const existingKeys = new Set(existing.map(r => `${r.decision}:${r.pattern.join(' ')}`));
+
+    const toAppend = [];
+    for (const r of rules) {
+        const key = `${r.decision}:${r.pattern.join(' ')}`;
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+        toAppend.push(r);
+    }
+    if (toAppend.length === 0) return 0;
+
+    const lines = toAppend.map(formatCodexRule);
+    const sep   = (existingContent && !existingContent.endsWith('\n')) ? '\n' : '';
+    const next  = existingContent + sep + lines.join('\n') + '\n';
+    try {
+        fs.writeFileSync(rulesPath, next, 'utf-8');
+    } catch (err) {
+        console.error('Failed to write Codex rules file:', err.message);
+        return 0;
+    }
+    return toAppend.length;
+}
+
 // Soft probe: verify the codex CLI binary exists and runs. Returns
 // { ok: true } if `codex --version` exits cleanly within 2s, otherwise
 // { ok: false, error: string }. Callers should use this for warning UX
@@ -845,6 +921,9 @@ module.exports = {
     readCodexRulesFile,
     parseCodexRules,
     codexRulesToClaudeAllow,
+    claudeAllowToCodexRules,
+    formatCodexRule,
+    applyCodexRulesFile,
     __test: {
         generalizeClaudePerm,
         isClaudePermCovered,
