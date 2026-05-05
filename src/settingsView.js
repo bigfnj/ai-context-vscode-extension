@@ -477,7 +477,6 @@ function render() {
                 </div>\`).join('') +
             \`<button class="sec full" onclick="send('newContext')">+ New Context</button>\`
         ) +
-        section('permissions', \`Permissions\${active ? ' — ' + esc(active) : ''}\`, false, permsBody) +
         section('codex', 'Codex Settings', true, codexBody) +
         section('behaviour', 'Behaviour', true,
             TOGGLES.map(t => \`
@@ -506,6 +505,7 @@ function render() {
                     </label>
                 </div>\`).join('')
         ) +
+        section('permissions', \`Permissions\${active ? ' — ' + esc(active) : ''}\`, false, permsBody) +
         section('about', 'About', false,
             \`<div class="info-row"><span class="info-k">Version</span><span class="info-v">v\${esc(version)}</span></div>
              <div class="info-row"><span class="info-k">Projects Root</span><span class="info-v">\${esc(settings.projectsRoot||'~/projects')}</span></div>
