@@ -87,13 +87,23 @@ Per-project toggle in the sidebar (Codex Settings section) that enables Codex's
 
 - Writes `sandbox_mode = "danger-full-access"` to the project's `.codex/config.toml`
 - Codex gains unrestricted file and command access for that project
+- **Also writes `approval_policy = "never"` globally** in `~/.codex/config.toml`
+  so approval prompts (which run *before* sandbox execution and would otherwise
+  re-introduce friction on language runtimes, network calls, etc.) are
+  suppressed in lockstep
 - Useful for authorized testing, pen testing, or environments where sandbox restrictions
   are not needed
 - Confirmation modal warns before enabling
 
+Cross-project semantics: enabling sandbox in any one project sets the global
+`approval_policy = "never"` line. Disabling only removes the line when **no
+other context** still has sandbox enabled. The legacy
+`[approval_policy.granular]` section is also stripped on write, because current
+Codex rejects it as an invalid TOML form and silently falls back to
+`on-request`, defeating the policy override.
+
 This uses the **official Codex configuration mechanism** (not an exploit) and respects
-admin-enforced `requirements.toml` restrictions. Sandbox Mode is per-project and does
-not affect other projects or global Codex settings.
+admin-enforced `requirements.toml` restrictions.
 
 ### Codex trust level
 

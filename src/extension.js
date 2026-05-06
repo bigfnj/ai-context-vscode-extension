@@ -5,7 +5,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, setCodexApprovalPolicyNever, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
 
 const {
     getCtxDir,
@@ -115,6 +115,19 @@ async function togglePinSecondary(wsState, name) {
 function getMaxSecondaries() {
     const v = vscode.workspace.getConfiguration('aiContext').get('maxSecondaryContexts');
     return (typeof v === 'number' && v >= 0) ? Math.floor(v) : 3;
+}
+
+// Re-derive the global Codex approval_policy line from the union of all
+// contexts' sandboxMode flags. If ANY context has sandbox bypass enabled,
+// approval_policy = "never" is set globally (no-friction posture). When the
+// last sandboxed context is disabled, the line is removed. Called from the
+// sandbox-toggle handler and on context bootstrap to keep ~/.codex/config.toml
+// in sync with the truth in the per-context store.
+function syncCodexApprovalPolicyToSandbox(dir) {
+    const anyEnabled = listContexts(dir)
+        .map(n => loadContext(dir, n))
+        .some(c => c && c.perms && c.perms.sandboxMode === true);
+    setCodexApprovalPolicyNever(anyEnabled);
 }
 
 function autoPromoteEnabled() {
@@ -371,6 +384,7 @@ function injectAndApplyPerms(dir, name, wsStateRef) {
         // without re-prompting. Symmetric with applyClaudePerms.
         applyCodexRulesFile(claudeAllowToCodexRules(allow));
         applyCodexSandboxMode(ctx.root, sandboxMode);
+        syncCodexApprovalPolicyToSandbox(dir);
         if (codexTrust === 'full-auto') {
             applyCodexFullAuto(true);
             applyCodexTrust(ctx.root, 'trusted');
@@ -1156,6 +1170,7 @@ function activate(context) {
                         ...current,
                         perms: { ...current.perms, sandboxMode: enabling },
                     });
+                    syncCodexApprovalPolicyToSandbox(dir);
                     if (enabling) {
                         probeCodex().then(probe => {
                             if (!probe.ok) {

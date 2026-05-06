@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.10.0] — Sandbox toggle also writes `approval_policy = "never"` globally
+
+### Changed
+
+- The per-project Codex sandbox-mode toggle now also writes
+  `approval_policy = "never"` to global `~/.codex/config.toml` whenever **any**
+  context has sandbox bypass enabled, and removes it when the last sandboxed
+  context is disabled. Reason: `sandbox_mode` and `approval_policy` are
+  independent gates in Codex's pipeline (approval gate runs **before** sandbox
+  execution), so enabling sandbox bypass alone does nothing about the prompts
+  that fire on language runtimes / network calls / etc. Without the policy
+  flip, the user kept getting prompted (e.g. on `python3 …`) even though they'd
+  asked for "no friction" via the sandbox toggle.
+- Cross-project semantics: enabling sandbox in any one project sets the global
+  policy. Disabling only removes the policy line if **no other context** still
+  has sandbox enabled.
+- Always strips the legacy `[approval_policy.granular]` section when writing,
+  because current Codex CLI rejects it ("granular is not a unit variant") and
+  silently falls back to `on-request`, overriding our scalar `approval_policy`.
+- Bootstrap on context switch also re-derives the global policy line, keeping
+  `~/.codex/config.toml` in sync with the per-context store across restarts.
+
+### Added
+
+- `setCodexApprovalPolicyNever(enabled)` in `permissions.js` — clean toggle for
+  the global scalar `approval_policy` line. Respects user-set non-`"never"`
+  values on disable (only removes the line if it equals `"never"`).
+
+---
+
 ## [3.9.4] — Sandbox probe recognises OpenAI's `openai.chatgpt` extension id
 
 ### Fixed

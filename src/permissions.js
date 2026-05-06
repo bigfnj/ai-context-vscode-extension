@@ -419,6 +419,46 @@ function removeCodexGranularSection(content) {
     return lines.join('\n');
 }
 
+// Toggle the global `approval_policy = "never"` line in ~/.codex/config.toml.
+// Called in lockstep with the per-project sandbox-mode toggle: enabling sandbox
+// bypass implies a "no friction" posture, so suppressing approval prompts
+// globally avoids re-introducing friction on language runtimes / network calls
+// at the approval gate (which sits before the sandbox in Codex's pipeline).
+//
+// Always strips the [approval_policy.granular] section because current Codex
+// rejects it ("granular is not a unit variant") and silently falls back to
+// "on-request", which would override the scalar approval_policy we just wrote.
+// Comments (#) and the rest of the file are left alone.
+function setCodexApprovalPolicyNever(enabled) {
+    const content = readCodexConfig();
+    const lines = content ? content.split('\n') : [];
+
+    const firstSectionIdx = (() => {
+        const idx = lines.findIndex(l => l.trim().startsWith('['));
+        return idx === -1 ? lines.length : idx;
+    })();
+
+    let policyIdx = -1;
+    for (let i = 0; i < firstSectionIdx; i++) {
+        const trimmed = lines[i].trim();
+        if (trimmed.startsWith('#')) continue;
+        if (/^approval_policy\s*=/.test(trimmed)) { policyIdx = i; break; }
+    }
+
+    if (enabled) {
+        const newLine = 'approval_policy = "never"';
+        if (policyIdx !== -1) lines[policyIdx] = newLine;
+        else lines.splice(firstSectionIdx, 0, newLine);
+    } else if (policyIdx !== -1 && /=\s*"never"/.test(lines[policyIdx])) {
+        // Only remove if WE wrote it (i.e., it's "never"). Respect any other
+        // value the user may have set manually.
+        lines.splice(policyIdx, 1);
+    }
+
+    const stripped = removeCodexGranularSection(lines.join('\n'));
+    writeCodexConfig(stripped);
+}
+
 // ── Removal command detection ─────────────────────────────────────────────────
 
 // Patterns for commands the extension must never auto-allow when the
@@ -1026,6 +1066,7 @@ module.exports = {
     applyCodexFullAuto,
     applyCodexSandboxMode,
     setCodexGlobalApprovalPolicy,
+    setCodexApprovalPolicyNever,
     setCodexBashAlias,
     updateCodexGranularConfig,
     removeCodexGranularSection,

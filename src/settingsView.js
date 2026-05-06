@@ -168,7 +168,8 @@ class SettingsViewProvider {
             }
             case 'setCodexSandbox': {
                 if (!active) break;
-                const { applyCodexSandboxMode } = require('./permissions');
+                const { applyCodexSandboxMode, setCodexApprovalPolicyNever } = require('./permissions');
+                const { listContexts, loadContext } = require('./context');
                 const ctx = loadContext(dir, active);
                 const enabling = msg.enabled === true;
                 if (enabling) {
@@ -200,6 +201,10 @@ class SettingsViewProvider {
                     ...ctx,
                     perms: { ...ctx.perms, sandboxMode: enabling },
                 });
+                const anyEnabled = listContexts(dir)
+                    .map(n => loadContext(dir, n))
+                    .some(c => c && c.perms && c.perms.sandboxMode === true);
+                setCodexApprovalPolicyNever(anyEnabled);
                 if (enabling && this._actions.probeCodex) {
                     // Soft probe — checks both CLI on PATH and installed VS Code
                     // Codex extension. Either path is enough. Warns only when
