@@ -447,10 +447,17 @@ function activate(context) {
     function probeCodexVSCodeExtension() {
         try {
             const exts = vscode.extensions.all || [];
+            // OpenAI publishes the official Codex extension as `openai.chatgpt` (displayName "Codex – OpenAI's coding agent").
+            // Match the known publisher.id pairs first, then fall back to substring scans on id/name/displayName.
+            const KNOWN_IDS = ['openai.chatgpt', 'openai.codex'];
             const codex = exts.find(e => {
                 const id   = (e.id || '').toLowerCase();
                 const name = (e.packageJSON && e.packageJSON.name || '').toLowerCase();
-                return id.includes('codex') || name.includes('codex');
+                const disp = (e.packageJSON && e.packageJSON.displayName || '').toLowerCase();
+                return KNOWN_IDS.includes(id)
+                    || id.includes('codex')
+                    || name.includes('codex')
+                    || disp.includes('codex');
             });
             if (!codex) return { ok: false, error: 'Codex VS Code extension not installed' };
             const id  = codex.id;

@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.9.4] — Sandbox probe recognises OpenAI's `openai.chatgpt` extension id
+
+### Fixed
+
+- `probeCodexVSCodeExtension()` was searching for the substring `"codex"` in the
+  installed extension's id and `packageJSON.name`. OpenAI publishes the official
+  Codex extension as **`openai.chatgpt`** (with `displayName` "Codex – OpenAI's
+  coding agent"), so the substring scan never matched and the sandbox toggle
+  always warned "Codex VS Code extension not installed" even when it was.
+- Probe now matches a known-id allow-list (`openai.chatgpt`, `openai.codex`)
+  first, then falls back to substring scans on `id`, `name`, and `displayName`
+  for forward compatibility with future renames.
+
+---
+
 ## [2.9.7] — Live permission capture from Claude & Codex
 
 ### Added
