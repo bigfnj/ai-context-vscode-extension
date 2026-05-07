@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { listContexts, loadContext, saveContext, getCtxDir, getProjectsRoot } = require('./context');
+const { listContexts, loadContext, saveContext, getCtxDir, getProjectsRoot, checkContextHealth, listTemplates } = require('./context');
 const { getAgents } = require('./inject');
 const { listRemovalCommands } = require('./permissions');
 
@@ -91,7 +91,16 @@ class SettingsViewProvider {
                 return { name, root: ctx.root || '', pinned: pinnedSet.has(name) };
             });
 
-        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION });
+        let activeHealth = null;
+        if (active) {
+            const ctx = loadContext(dir, active);
+            activeHealth = checkContextHealth(ctx);
+        }
+        const templates = listTemplates(dir).map(name => {
+            const ctx = loadContext(dir, name);
+            return { name, decisions: (ctx.d||[]).length, files: (ctx.f||[]).length };
+        });
+        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates });
     }
 
     async _handleMessage(msg) {
@@ -241,6 +250,22 @@ class SettingsViewProvider {
                 if (this._actions.togglePinSecondary) await this._actions.togglePinSecondary(msg.name);
                 break;
             }
+            case 'duplicateContext': {
+                await vscode.commands.executeCommand('ai.duplicateContext');
+                break;
+            }
+            case 'healthCheck': {
+                await vscode.commands.executeCommand('ai.healthCheck');
+                break;
+            }
+            case 'saveAsTemplate': {
+                await vscode.commands.executeCommand('ai.saveAsTemplate');
+                break;
+            }
+            case 'newFromTemplate': {
+                await vscode.commands.executeCommand('ai.newContextFromTemplate');
+                break;
+            }
         }
     }
 
@@ -262,6 +287,8 @@ body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);col
 .chev.open{transform:rotate(90deg)}
 .active-card{background:var(--vscode-editor-inactiveSelectionBackground,rgba(255,255,255,.05));border:1px solid var(--vscode-focusBorder,rgba(255,255,255,.12));border-radius:4px;padding:10px 12px;margin-bottom:8px}
 .act-name{font-size:13px;font-weight:600;color:var(--vscode-textLink-foreground,#4fc3f7);margin-bottom:2px}
+.health-dot{font-size:9px;vertical-align:middle;margin-left:4px}
+.health-ok{color:#4caf50}.health-warn{color:#ff9800}
 .act-root{font-size:11px;color:var(--vscode-descriptionForeground);margin-bottom:8px;word-break:break-all}
 .no-active{color:var(--vscode-descriptionForeground);font-style:italic;margin-bottom:8px}
 .btn-row{display:flex;gap:6px;flex-wrap:wrap}
@@ -353,7 +380,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '' };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [] };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -382,7 +409,7 @@ function fmt(iso) {
 }
 
 function render() {
-    const { active, previous, contexts, settings, perms, version, secondaries } = S;
+    const { active, previous, contexts, settings, perms, version, secondaries, activeHealth, templates } = S;
     const activeCtx   = contexts.find(c => c.name === active);
     const secList     = Array.isArray(secondaries) ? secondaries : [];
     const agents      = settings.agents || ['claude','codex','copilot'];
@@ -463,11 +490,13 @@ function render() {
         section('active', 'Active Context', true,
             (active && activeCtx)
                 ? \`<div class="active-card">
-                    <div class="act-name">\${esc(active)}</div>
+                    <div class="act-name">\${esc(active)}\${activeHealth ? \` <span class="health-dot \${activeHealth.ok ? 'health-ok' : 'health-warn'}" title="\${esc(activeHealth.ok ? 'Healthy' : activeHealth.warnings.join(' · '))}">●</span>\` : ''}</div>
                     <div class="act-root">\${esc(activeCtx.root)}</div>
                     <div class="btn-row">
                         <button onclick="send('reinject')">↺ Reinject</button>
                         <button class="sec" onclick="send('setActive')">⇄ Switch</button>
+                        <button class="sec" onclick="send('duplicateContext')" title="Duplicate this context">⧉</button>
+                        <button class="sec" onclick="send('saveAsTemplate')" title="Save as template">⊞</button>
                     </div></div>\${secondariesBlock}\${prevCard}\`
                 : \`<div class="no-active">No active context</div>
                    <button onclick="send('setActive')">Set Active</button>\${prevCard}\`
@@ -481,6 +510,19 @@ function render() {
                     </div>
                 </div>\`).join('') +
             \`<button class="sec full" onclick="send('newContext')">+ New Context</button>\`
+        ) +
+        section('templates', \`Templates (\${templates.length})\`, false,
+            (templates.length
+                ? templates.map(t => \`
+                    <div class="ctx-item">
+                        <div class="ctx-info">
+                            <div class="ctx-n">\${esc(t.name)}</div>
+                            <div class="ctx-t">\${t.decisions}d · \${t.files}f</div>
+                        </div>
+                    </div>\`).join('')
+                : '<div class="perm-empty">No templates yet — use ⊞ on an active context</div>'
+            ) +
+            \`<button class="sec full" onclick="send('newFromTemplate')">+ New from Template</button>\`
         ) +
         section('codex', 'Codex Settings', true, codexBody) +
         section('behaviour', 'Behaviour', true,

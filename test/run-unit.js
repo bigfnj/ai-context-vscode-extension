@@ -508,9 +508,93 @@ function testUpdateCodexTomlContent() {
     assert.ok(result3.includes('trust_level = "trusted"'), 'target trust_level updated');
 }
 
+function testSearchContexts() {
+    const dir = tmpDir();
+    context.saveContext(dir, 'AlphaProject', { ...context.createDefaultContext('AlphaProject', '/home/user/alpha'), n: 'working on auth', d: ['use JWT tokens'] });
+    context.saveContext(dir, 'BetaService',  { ...context.createDefaultContext('BetaService',  '/home/user/beta'),  f: ['src/database.js'] });
+    context.saveContext(dir, 'GammaApp',     { ...context.createDefaultContext('GammaApp',     '/home/user/gamma'), n: 'frontend work' });
+
+    const results = context.searchContexts(dir, 'alpha');
+    assert.ok(results.length > 0, 'search finds AlphaProject');
+    assert.strictEqual(results[0].name, 'AlphaProject', 'AlphaProject is top result for "alpha"');
+
+    const authResults = context.searchContexts(dir, 'auth');
+    assert.ok(authResults.some(r => r.name === 'AlphaProject'), 'note match finds AlphaProject');
+
+    const dbResults = context.searchContexts(dir, 'database');
+    assert.ok(dbResults.some(r => r.name === 'BetaService'), 'file match finds BetaService');
+
+    const noResults = context.searchContexts(dir, 'zzznomatch');
+    assert.strictEqual(noResults.length, 0, 'no results for unmatched query');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function testCheckContextHealth() {
+    const dir = tmpDir();
+
+    // Healthy context pointing at existing dir
+    const ctx1 = context.createDefaultContext('TestCtx', dir);
+    const h1 = context.checkContextHealth(ctx1);
+    assert.ok(!h1.ok || h1.warnings.some(w => w.includes('git')), 'non-git root gets warning');
+
+    // Missing root
+    const ctx2 = { ...context.createDefaultContext('NoRoot', '/nonexistent/path/xyz') };
+    const h2 = context.checkContextHealth(ctx2);
+    assert.ok(!h2.ok, 'missing root is unhealthy');
+    assert.ok(h2.warnings.some(w => w.includes('not found')), 'missing root warning present');
+
+    // Error flag
+    const ctx3 = { ...context.createDefaultContext('ErrCtx', dir), e: 'ctx_parse_err' };
+    const h3 = context.checkContextHealth(ctx3);
+    assert.ok(!h3.ok, 'error flag is unhealthy');
+
+    // No root set
+    const ctx4 = context.createDefaultContext('NoRootSet', '');
+    const h4 = context.checkContextHealth(ctx4);
+    assert.ok(!h4.ok, 'empty root is unhealthy');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function testTemplates() {
+    const dir = tmpDir();
+
+    // Create a base context and save as template
+    const base = context.createDefaultContext('MyProject', '/home/user/myproject');
+    base.d = ['Use TypeScript', 'Prefer functional patterns'];
+    base.c = ['No external dependencies'];
+    base.f = ['src/index.ts', 'src/utils.ts'];
+    base.n = 'working on refactor';
+    context.saveContext(dir, 'MyProject', base);
+
+    // Manually mark as template
+    const tplCtx = { ...base, p: 'MyProject-template', a: [], s: {}, m: { isTemplate: true } };
+    context.saveContext(dir, 'MyProject-template', tplCtx);
+
+    const templates = context.listTemplates(dir);
+    assert.ok(templates.includes('MyProject-template'), 'template appears in listTemplates');
+    assert.ok(!templates.includes('MyProject'), 'non-template excluded from listTemplates');
+
+    // Create from template
+    context.createFromTemplate(dir, 'MyProject-template', 'NewProject', '/home/user/new');
+    const newCtx = context.loadContext(dir, 'NewProject');
+    assert.deepStrictEqual(newCtx.d, base.d, 'decisions copied from template');
+    assert.deepStrictEqual(newCtx.c, base.c, 'constraints copied from template');
+    assert.deepStrictEqual(newCtx.f, base.f, 'files copied from template');
+    assert.strictEqual(newCtx.n, base.n, 'note copied from template');
+    assert.deepStrictEqual(newCtx.a, [], 'actions reset in new context');
+    assert.deepStrictEqual(newCtx.s, {}, 'session state reset in new context');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 testGeneralizeClaudePerm();
 testIsClaudePermCovered();
 testCaptureNewClaudePerms();
 testUpdateCodexTomlContent();
+testSearchContexts();
+testCheckContextHealth();
+testTemplates();
 
 console.log('unit tests passed');

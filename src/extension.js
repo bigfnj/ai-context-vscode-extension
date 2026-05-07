@@ -24,6 +24,10 @@ const {
     getWorkspaceRoot,
     scanAndCreateContexts,
     formatRelativeTime,
+    searchContexts,
+    checkContextHealth,
+    listTemplates,
+    createFromTemplate,
 } = require('./context');
 
 const {
@@ -1200,6 +1204,166 @@ function activate(context) {
         }
     });
 
+    // ── AI: Duplicate Context ─────────────────────────────────────────────────
+    const duplicateCtx = vscode.commands.registerCommand('ai.duplicateContext', async () => {
+        const contexts = listContexts(dir).filter(n => {
+            const c = loadContext(dir, n); return !c.m?.isTemplate;
+        });
+        if (contexts.length === 0) {
+            vscode.window.showInformationMessage('No contexts to duplicate.');
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            contexts.map(name => {
+                const ctx = loadContext(dir, name);
+                return { label: name, description: ctx.root || 'no root' };
+            }),
+            { placeHolder: 'Select context to duplicate' }
+        );
+        if (!pick) return;
+        const allNames = listContexts(dir);
+        const newName = await vscode.window.showInputBox({
+            prompt:        `Duplicate [${pick.label}] as:`,
+            placeHolder:   `${pick.label}-copy`,
+            validateInput: v => {
+                if (!v || !v.trim()) return 'Name cannot be empty';
+                if (allNames.includes(v.trim())) return 'Context already exists';
+                return null;
+            },
+        });
+        if (!newName) return;
+        const original = loadContext(dir, pick.label);
+        saveContext(dir, newName.trim(), { ...original, p: newName.trim(), createdAt: new Date().toISOString(), lastUsed: null });
+        settingsView.refresh();
+        notify(`Duplicated [${pick.label}] → [${newName.trim()}]`);
+    });
+
+    // ── AI: Search Contexts ───────────────────────────────────────────────────
+    const searchCtxCmd = vscode.commands.registerCommand('ai.searchContexts', async () => {
+        const query = await vscode.window.showInputBox({
+            prompt:      'Search contexts by name, path, notes, or files',
+            placeHolder: 'e.g. database, /home/bigfnj, auth',
+        });
+        if (!query || !query.trim()) return;
+        const results = searchContexts(dir, query);
+        if (results.length === 0) {
+            vscode.window.showInformationMessage(`No contexts matched "${query}".`);
+            return;
+        }
+        const pick = await vscode.window.showQuickPick(
+            results.map(r => ({
+                label:       r.name,
+                description: r.root || 'no root',
+                detail:      r.note ? `${r.note.slice(0, 80)}` : `last used: ${formatRelativeTime(r.lastUsed)}`,
+                _name:       r.name,
+            })),
+            { placeHolder: `${results.length} result(s) — select to make active` }
+        );
+        if (!pick) return;
+        await setActive(trackedWsState, pick._name);
+        showInjectionResult(pick._name, getAgents().join(', '), injectAndApplyPerms(dir, pick._name));
+    });
+
+    // ── AI: Health Check ──────────────────────────────────────────────────────
+    const healthCheckCmd = vscode.commands.registerCommand('ai.healthCheck', async () => {
+        const allCtx = listContexts(dir);
+        if (allCtx.length === 0) {
+            vscode.window.showInformationMessage('No contexts to check.');
+            return;
+        }
+        const items = allCtx.map(name => {
+            const ctx    = loadContext(dir, name);
+            const health = checkContextHealth(ctx);
+            const icon   = health.ok ? '$(pass) ' : health.warnings.length > 1 ? '$(error) ' : '$(warning) ';
+            return {
+                label:       `${icon}${name}`,
+                description: health.ok ? 'healthy' : health.warnings[0],
+                detail:      health.warnings.length > 1 ? health.warnings.slice(1).join(' · ') : undefined,
+                _name:       name,
+            };
+        });
+        const pick = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Context health — pick to open JSON',
+        });
+        if (!pick) return;
+        const file = vscode.Uri.file(require('path').join(dir, `${pick._name}.json`));
+        await vscode.commands.executeCommand('vscode.open', file);
+    });
+
+    // ── AI: Save as Template ──────────────────────────────────────────────────
+    const saveAsTemplateCmd = vscode.commands.registerCommand('ai.saveAsTemplate', async () => {
+        const active = getActive(trackedWsState);
+        if (!active) {
+            vscode.window.showWarningMessage('Set an active context first.');
+            return;
+        }
+        const allNames = listContexts(dir);
+        const suggested = `${active}-template`;
+        const tplName = await vscode.window.showInputBox({
+            prompt:        `Save [${active}] as template:`,
+            value:         suggested,
+            validateInput: v => {
+                if (!v || !v.trim()) return 'Name cannot be empty';
+                if (allNames.includes(v.trim())) return 'Name already exists';
+                return null;
+            },
+        });
+        if (!tplName) return;
+        const ctx = loadContext(dir, active);
+        saveContext(dir, tplName.trim(), {
+            ...ctx,
+            p:         tplName.trim(),
+            a:         [],
+            s:         {},
+            lastUsed:  null,
+            createdAt: new Date().toISOString(),
+            m:         { ...ctx.m, isTemplate: true },
+        });
+        settingsView.refresh();
+        notify(`Saved [${active}] as template [${tplName.trim()}]`);
+    });
+
+    // ── AI: New Context from Template ─────────────────────────────────────────
+    const newFromTemplateCmd = vscode.commands.registerCommand('ai.newContextFromTemplate', async () => {
+        const templates = listTemplates(dir);
+        if (templates.length === 0) {
+            vscode.window.showInformationMessage('No templates found. Use "AI: Save as Template" to create one.');
+            return;
+        }
+        const tplPick = await vscode.window.showQuickPick(
+            templates.map(name => {
+                const ctx = loadContext(dir, name);
+                return { label: name, description: `${(ctx.d||[]).length} decisions, ${(ctx.f||[]).length} files` };
+            }),
+            { placeHolder: 'Select template' }
+        );
+        if (!tplPick) return;
+        const allNames = listContexts(dir);
+        const newName = await vscode.window.showInputBox({
+            prompt:        `New context name (from template [${tplPick.label}]):`,
+            placeHolder:   'e.g. MyNewProject',
+            validateInput: v => {
+                if (!v || !v.trim()) return 'Name cannot be empty';
+                if (allNames.includes(v.trim())) return 'Context already exists';
+                return null;
+            },
+        });
+        if (!newName) return;
+        const created = await createContextWithRoot(dir, newName.trim());
+        if (!created) return;
+        createFromTemplate(dir, tplPick.label, newName.trim(), loadContext(dir, newName.trim()).root);
+        const makeActive = await vscode.window.showInformationMessage(
+            `Context [${newName.trim()}] created from template [${tplPick.label}]. Set as active?`,
+            'Yes', 'No'
+        );
+        if (makeActive === 'Yes') {
+            await setActive(trackedWsState, newName.trim());
+            showInjectionResult(newName.trim(), getAgents().join(', '), injectAndApplyPerms(dir, newName.trim()));
+        } else {
+            settingsView.refresh();
+        }
+    });
+
     // ── AI: New Context ───────────────────────────────────────────────────────
     const newContext = vscode.commands.registerCommand('ai.newContext', async () => {
         const existing = listContexts(dir);
@@ -1714,6 +1878,7 @@ function activate(context) {
         configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
         deleteCtx, cleanUp, restoreCtx, reinjectCmd,
         addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd, togglePinCmd,
+        duplicateCtx, searchCtxCmd, healthCheckCmd, saveAsTemplateCmd, newFromTemplateCmd,
         watcher, claudeWatcher, codexWatcher, codexRulesWatcher, codexRolloutWatcher
     );
 }

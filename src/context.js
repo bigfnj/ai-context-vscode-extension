@@ -336,6 +336,68 @@ function scanAndCreateContexts(dir, projectsRoot) {
     return created;
 }
 
+function searchContexts(dir, query) {
+    if (!query || !query.trim()) return [];
+    const q = query.trim().toLowerCase();
+    return listContexts(dir)
+        .map(name => {
+            const ctx = loadContext(dir, name);
+            let score = 0;
+            if (ctx.p && ctx.p.toLowerCase().includes(q))    score += 3;
+            if (ctx.root && ctx.root.toLowerCase().includes(q)) score += 2;
+            if (ctx.n && ctx.n.toLowerCase().includes(q))    score += 2;
+            if (asList(ctx.f).some(v => v.toLowerCase().includes(q))) score += 1;
+            if (asList(ctx.d).some(v => v.toLowerCase().includes(q))) score += 1;
+            if (asList(ctx.c).some(v => v.toLowerCase().includes(q))) score += 1;
+            return score > 0 ? { name, root: ctx.root || '', note: ctx.n || '', lastUsed: ctx.lastUsed, score } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score);
+}
+
+function checkContextHealth(ctx) {
+    const warnings = [];
+    if (!ctx.root || !ctx.root.trim()) {
+        warnings.push('No project root set');
+    } else {
+        if (!fs.existsSync(ctx.root)) warnings.push(`Root path not found: ${ctx.root}`);
+        else if (!fs.existsSync(path.join(ctx.root, '.git'))) warnings.push('Root is not a git repository');
+    }
+    for (const f of asList(ctx.f)) {
+        const abs = path.isAbsolute(f) ? f : ctx.root ? path.join(ctx.root, f) : null;
+        if (abs && !fs.existsSync(abs)) warnings.push(`Missing file: ${f}`);
+    }
+    if (ctx.lastUsed) {
+        const days = Math.floor((Date.now() - new Date(ctx.lastUsed).getTime()) / 86400000);
+        if (days > 30) warnings.push(`Stale — last used ${days} days ago`);
+    }
+    const maxA = DEFAULT_MAX_ACTIONS;
+    if (Array.isArray(ctx.a) && ctx.a.length >= maxA * 0.9) warnings.push('Actions near compaction limit');
+    if (ctx.e) warnings.push(`Parse error flag: ${ctx.e}`);
+    return { ok: warnings.length === 0, warnings };
+}
+
+function listTemplates(dir) {
+    return listContexts(dir).filter(name => {
+        const ctx = loadContext(dir, name);
+        return ctx.m && ctx.m.isTemplate === true;
+    });
+}
+
+function createFromTemplate(dir, templateName, newName, root) {
+    const tmpl = loadContext(dir, templateName);
+    const base = createDefaultContext(newName, root || '');
+    saveContext(dir, newName, {
+        ...base,
+        b: asList(tmpl.b),
+        d: asList(tmpl.d),
+        c: asList(tmpl.c),
+        f: asList(tmpl.f),
+        n: tmpl.n || '',
+        i: tmpl.i || '',
+    });
+}
+
 function formatRelativeTime(isoString) {
     if (!isoString) return 'never';
     const diff    = Date.now() - new Date(isoString).getTime();
@@ -377,4 +439,8 @@ module.exports = {
     listProjectDirs,
     scanAndCreateContexts,
     formatRelativeTime,
+    searchContexts,
+    checkContextHealth,
+    listTemplates,
+    createFromTemplate,
 };

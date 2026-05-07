@@ -93,6 +93,26 @@
       {
         "command": "ai.toggleSecondaryPin",
         "title": "AI: Toggle Pin on Secondary Context"
+      },
+      {
+        "command": "ai.duplicateContext",
+        "title": "AI: Duplicate Context"
+      },
+      {
+        "command": "ai.searchContexts",
+        "title": "AI: Search Contexts"
+      },
+      {
+        "command": "ai.healthCheck",
+        "title": "AI: Health Check"
+      },
+      {
+        "command": "ai.saveAsTemplate",
+        "title": "AI: Save as Template"
+      },
+      {
+        "command": "ai.newContextFromTemplate",
+        "title": "AI: New Context from Template"
       }
     ],
     "keybindings": [
@@ -115,6 +135,11 @@
         "command": "ai.config",
         "key": "ctrl+alt+c",
         "mac": "cmd+alt+c"
+      },
+      {
+        "command": "ai.searchContexts",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f"
       }
     ],
     "configuration": {
