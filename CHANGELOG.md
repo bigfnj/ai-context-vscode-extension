@@ -43,10 +43,12 @@ auto-inject into the same agent files behind separate fenced blocks.
     uninstall restores from backup.
   - Two new commands: `AI Understanding: Install Pre-Commit Hook` and
     `…: Uninstall Pre-Commit Hook`.
-  - Settings webview gains an "AI Understanding" section: status summary,
-    fresh/stale/untracked/orphan counts, hook install state, and
-    context-sensitive action buttons (Initialize / Show Status / Refresh /
-    Install or Uninstall Hook).
+  - Settings webview gains an "AI Understanding" section: workspace
+    name (with full path on hover), status summary, fresh/stale/untracked/
+    orphan counts, hook install state, and context-sensitive action buttons
+    (Initialize / Show Status / Refresh / Install or Uninstall Hook).
+    The workspace label disambiguates which window's panel you are looking
+    at when several VS Code windows are open.
 
 - **Phase 5 — Self-bootstrap** (`4b5016f`).
   - `AI_UNDERSTANDING/` now ships with the extension as a populated,
