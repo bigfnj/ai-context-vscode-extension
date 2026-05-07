@@ -5,7 +5,7 @@
   "version": "3.11.0",
   "publisher": "local",
   "scripts": {
-    "test": "node test/run-unit.js"
+    "test": "node test/run-unit.js && node test/run-understanding.js"
   },
   "repository": {
     "type": "git",
