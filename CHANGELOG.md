@@ -50,6 +50,16 @@ auto-inject into the same agent files behind separate fenced blocks.
     The workspace label disambiguates which window's panel you are looking
     at when several VS Code windows are open.
 
+- **Project-scoped throughout** (`01b81b9`). AIU follows the active AI
+  Context, not the VS Code workspace folder. The status bar, settings
+  panel, and the injected CLAUDE.md / AGENTS.md AIU block all read the
+  active context's `root`. The AIU block now leads with
+  `AIU_PROJECT="..."` + `AIU_ROOT="..."` and tells the agent explicitly:
+  after ingesting `AI_CONTEXT` above, also ingest this AI Understanding
+  block — both belong to the same project. Switching the active context
+  re-targets AIU immediately. Workspace folder remains a fallback when
+  no context is active.
+
 - **Phase 5 — Self-bootstrap** (`4b5016f`).
   - `AI_UNDERSTANDING/` now ships with the extension as a populated,
     full-fidelity tree: 13 entries (package.json + 9 `src/*` + 2 `test/*` +
