@@ -5,6 +5,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — AI Understanding (Phases 3–5)
+
+Tracks the remaining work to complete the AI Understanding feature introduced
+in 3.12.0. Spec: `AI_UNDERSTANDING_FORMAT.md`. The 4.0.0 release ships when
+all three phases below are done.
+
+### Planned
+
+- **Phase 3** — `CLAUDE.md` auto-block injection of `AIU_STALE`,
+  `AIU_UNTRACKED`, `AIU_ORPHAN` arrays (spec §8.3) so AI agents see the
+  freshness signal each session. Matching update to AGENTS.md edit rules
+  for Codex parity.
+- **Phase 4** — Pre-commit hook script (block-narrow mode, spec §9) plus a
+  Settings panel section for opt-in install / status / uninstall.
+- **Phase 5** — Bootstrap AI Understanding on the extension itself, so this
+  repo ships with its own filled-in `AI_UNDERSTANDING/` tree.
+
+---
+
+## [3.12.0] — AI Understanding: commands + status bar (preview)
+
+Introduces a per-project, git-tracked, machine-edited model of the codebase
+(`AI_UNDERSTANDING/`) — sidecar JSON entries capturing per-file purpose,
+exports, imports, invariants, and gotchas. See `AI_UNDERSTANDING_FORMAT.md`
+for the schema-v1 contract.
+
+### Added
+
+- **`AI_UNDERSTANDING_FORMAT.md`** — full spec: directory layout, per-file
+  and meta schemas, validator rules, update protocol for AI agents, hook
+  policy, versioning rules.
+- **`src/understanding.js`** — pure-Node implementation (no new deps):
+  - `sha1` / `sha1File` over file bytes for staleness detection.
+  - `validateEntry`, `validateMeta`, `validateOperation` enforcing §7 rules
+    (33 % mass-edit cap with bootstrap bypass, schema-v1 lock, 40-hex
+    lowercase sha1, path identity, no unknown fields).
+  - Per-file CRUD: `readEntry`, `writeEntry`, `deleteEntry`, `readMeta`,
+    `writeMeta`, `listEntries`.
+  - `generateSkeleton(projectRoot, opts?)` — bootstrap walks tracked globs,
+    emits skeleton entries (`purpose: "TODO"`) and a populated `_meta.json`
+    with auto-detected frameworks from `package.json`.
+  - `computeStatus(projectRoot)` — categorized `fresh / stale / untracked /
+    orphan` arrays per spec §6, plus `isClean` and `formatStatusBar` helpers.
+  - Minimal in-tree glob matcher (`**`, `*`, `?`, brace alternation) — no
+    `minimatch` dependency.
+- **`src/aiu.js`** — VS Code adapter. Three commands:
+  - `AI Understanding: Initialize` (`ai.aiuInit`)
+  - `AI Understanding: Show Status` (`ai.aiuStatus`)
+  - `AI Understanding: Refresh` (`ai.aiuRefresh`)
+- **Status bar item** (left, priority 9): `AIU: clean` / `AIU: 3 stale,
+  1 untracked` / `AIU: not initialized`. 250 ms-debounced filesystem watcher
+  keeps the bar in sync with workspace changes.
+- **37 unit tests** wired into `npm test` covering hashing, glob matching,
+  validator success/failure paths, CRUD round-trip, path-traversal
+  rejection, end-to-end skeleton generation, and all `computeStatus`
+  staleness states.
+
+### Notes
+
+- Preview surface — Phases 3–5 (CLAUDE.md auto-block injection, pre-commit
+  hook, self-bootstrap) follow in subsequent releases. See `[Unreleased]`.
+- Failures during AI Understanding activation are caught and logged; they
+  cannot break the rest of the extension.
+
+---
+
 ## [3.10.0] — Sandbox toggle also writes `approval_policy = "never"` globally
 
 ### Changed
