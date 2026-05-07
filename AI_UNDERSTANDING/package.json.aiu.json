@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "package.json",
-  "sha1": "e07775897b287ac68f090dcaccb71b2b2107d980",
+  "sha1": "92fc48aa66ab095072da63e8094f1af3ac54231d",
   "purpose": "Extension manifest. Declares VS Code contributes (commands, keybindings, settings, views, viewsContainers) and runtime metadata (engines, activationEvents).",
   "exports": [],
   "imports": [],

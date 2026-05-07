@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/extension.js",
-  "sha1": "195d6d3e9a710051a7110a01fc892db0d50b1954",
+  "sha1": "2e3ec46eb3a0ab077a09e214040e820917469955",
   "purpose": "Extension entrypoint. Wires up the workspace context store, settings webview, command surface, file watchers (.json/.json.update sidecars, .cwd, ~/.claude, ~/.codex), and forwards activation/deactivation to the AI Understanding subsystem (aiu.js).",
   "exports": [
     "activate",

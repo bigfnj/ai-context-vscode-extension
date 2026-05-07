@@ -79,6 +79,10 @@
         "title": "AI: Config"
       },
       {
+        "command": "ai.openSettingsPanel",
+        "title": "AI: Open Settings Panel"
+      },
+      {
         "command": "ai.addSecondaryContext",
         "title": "AI: Add Secondary Context"
       },

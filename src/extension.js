@@ -565,6 +565,16 @@ function activate(context) {
         {
             getSecondaries: () => getSecondaries(trackedWsState),
             getPinned: () => getPinned(trackedWsState),
+            // Section open/closed state persists across windows + sessions.
+            // Stored per-section in globalState (cross-workspace) so a
+            // user's UX preference for which sections are expanded follows
+            // them everywhere.
+            getSectionStates: () => context.globalState.get('ai.sectionStates', {}),
+            setSectionState: (id, open) => {
+                const cur = context.globalState.get('ai.sectionStates', {});
+                cur[id] = !!open;
+                return context.globalState.update('ai.sectionStates', cur);
+            },
             probeCodex: () => probeCodex(),
             switchToPrev: async () => {
                 const prev = getPrevious(trackedWsState);
@@ -775,6 +785,15 @@ function activate(context) {
         windsurf: 'Windsurf  →  .windsurfrules',
         kilo:     'Kilo  →  AGENTS.md',
     };
+
+    const openSettingsPanelCmd = vscode.commands.registerCommand('ai.openSettingsPanel', () => {
+        // Opens the AI Context Runner UI as a real editor tab. The user can
+        // then drag it to a split, second screen, or its own window. State
+        // syncs across the sidebar and any open panels via the same
+        // SettingsViewProvider broadcast.
+        const panel = settingsView.openPanel();
+        context.subscriptions.push({ dispose: () => panel.dispose() });
+    });
 
     const configCmd = vscode.commands.registerCommand('ai.config', async () => {
         // Loop so the menu stays open after each change
@@ -1898,7 +1917,7 @@ function activate(context) {
     } catch { /* sweep is best-effort */ }
 
     context.subscriptions.push(
-        configCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
+        configCmd, openSettingsPanelCmd, setActiveCmd, runTask, viewContext, managePermissions, newContext,
         deleteCtx, cleanUp, restoreCtx, reinjectCmd,
         addSecondaryCmd, removeSecondaryCmd, clearSecondaryCmd, togglePinCmd,
         duplicateCtx, searchCtxCmd, healthCheckCmd, saveAsTemplateCmd, newFromTemplateCmd,

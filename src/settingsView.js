@@ -33,20 +33,55 @@ class SettingsViewProvider {
         this._getActiveName   = getActiveName;
         this._getPreviousName = getPreviousName || (() => null);
         this._actions         = actions;
-        this._view = null;
+        // Surfaces (sidebar view + any open standalone panels). All receive
+        // the same state on refresh; messages from any surface are handled
+        // identically. Sidebar registers its surface in resolveWebviewView;
+        // panels register via openPanel.
+        this._surfaces = [];
+        // Section open/closed state, lazily fetched from globalState. The
+        // host (extension.js) supplies the storage callbacks; if absent
+        // (e.g. tests) we default to {} and don't persist.
+        this._getSectionStates = (actions && actions.getSectionStates) || (() => ({}));
+        this._setSectionState  = (actions && actions.setSectionState)  || (() => {});
     }
 
     resolveWebviewView(webviewView) {
-        this._view = webviewView;
         webviewView.webview.options = { enableScripts: true };
         webviewView.webview.html = this._getHtml();
-        webviewView.webview.onDidReceiveMessage(msg => this._handleMessage(msg));
-        webviewView.onDidChangeVisibility(() => { if (webviewView.visible) this.refresh(); });
+        this._attachSurface(webviewView, webviewView.webview, 'view');
+    }
+
+    // Open a standalone WebviewPanel — same HTML, same messaging, same state.
+    // Returns the panel so the caller can decide where it goes (splits, etc.).
+    openPanel() {
+        const panel = vscode.window.createWebviewPanel(
+            'aiContext.settingsPanel',
+            'AI Context Runner',
+            vscode.ViewColumn.Active,
+            { enableScripts: true, retainContextWhenHidden: true }
+        );
+        panel.webview.html = this._getHtml();
+        this._attachSurface(panel, panel.webview, 'panel');
+        return panel;
+    }
+
+    _attachSurface(host, webview, kind) {
+        const surface = { host, webview, kind };
+        this._surfaces.push(surface);
+        webview.onDidReceiveMessage(msg => this._handleMessage(msg));
+        if (kind === 'view') {
+            host.onDidChangeVisibility(() => { if (host.visible) this.refresh(); });
+        } else {
+            host.onDidChangeViewState(() => { if (host.visible) this.refresh(); });
+            host.onDidDispose(() => {
+                this._surfaces = this._surfaces.filter(s => s !== surface);
+            });
+        }
         this.refresh();
     }
 
     refresh() {
-        if (!this._view || !this._view.visible) return;
+        if (!this._surfaces.some(s => s.host.visible)) return;
         const dir    = getCtxDir();
         const cfg    = vscode.workspace.getConfiguration('aiContext');
         const active = this._getActiveName();
@@ -142,7 +177,12 @@ class SettingsViewProvider {
             };
         })();
 
-        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu });
+        const sectionStates = this._getSectionStates() || {};
+        const payload = { type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu, sectionStates };
+        for (const surface of this._surfaces) {
+            if (!surface.host.visible) continue;
+            surface.webview.postMessage(payload);
+        }
     }
 
     async _handleMessage(msg) {
@@ -308,6 +348,19 @@ class SettingsViewProvider {
                 await vscode.commands.executeCommand('ai.newContextFromTemplate');
                 break;
             }
+            case 'toggleSection': {
+                // Persist open/closed state for the named section. Webview
+                // already updated its own DOM optimistically; we only need
+                // to write through to globalState so other surfaces and
+                // future sessions observe the new state.
+                if (typeof msg.id === 'string') {
+                    this._setSectionState(msg.id, !!msg.open);
+                    // Re-broadcast so any other open surface (panel + sidebar)
+                    // mirrors the change.
+                    this.refresh();
+                }
+                break;
+            }
             case 'aiuInit':          await vscode.commands.executeCommand('ai.aiuInit');          this.refresh(); break;
             case 'aiuStatus':        await vscode.commands.executeCommand('ai.aiuStatus');        this.refresh(); break;
             case 'aiuRefresh':       await vscode.commands.executeCommand('ai.aiuRefresh');       this.refresh(); break;
@@ -427,7 +480,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false } };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false }, sectionStates: {} };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -645,7 +698,12 @@ function render() {
         );
 }
 
-function section(id, title, open, body) {
+function section(id, title, defaultOpen, body) {
+    // Stored state wins over the default. Open if globalState says so or
+    // (when no entry yet) the caller's default. This is what makes
+    // collapsed/expanded headers stick across reloads and windows.
+    const stored = S.sectionStates && S.sectionStates[id];
+    const open = stored === undefined ? defaultOpen : !!stored;
     return \`<div class="section">
         <div class="sec-hdr" onclick="tog('\${id}')">
             <span>\${title}</span>
@@ -656,8 +714,16 @@ function section(id, title, open, body) {
 }
 
 function tog(id) {
-    document.getElementById('b-'+id).classList.toggle('hide');
-    document.getElementById('c-'+id).classList.toggle('open');
+    const body = document.getElementById('b-'+id);
+    const chev = document.getElementById('c-'+id);
+    if (!body) return;
+    const willOpen = body.classList.contains('hide');
+    body.classList.toggle('hide');
+    chev.classList.toggle('open');
+    // Persist via the extension. Optimistic local toggle above gives
+    // instant feedback; the message round-trip writes through globalState
+    // and re-broadcasts so the sidebar and any open panels stay in sync.
+    vscode.postMessage({ type: 'toggleSection', id, open: willOpen });
 }
 
 function removePerm(idx) {
