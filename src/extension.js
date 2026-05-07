@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
+const aiu = require('./aiu');
 
 const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, setCodexApprovalPolicyNever, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
 
@@ -406,6 +407,11 @@ function injectAndApplyPerms(dir, name, wsStateRef) {
 function activate(context) {
     const dir     = getCtxDir();
     const wsState = context.workspaceState;
+
+    // AI Understanding (commands + status bar). Self-contained module —
+    // failures here must not break the rest of the extension.
+    try { aiu.activate(context); }
+    catch (err) { console.error('AI Understanding activation failed:', err); }
 
     // ── Sweep: consume any orphan *.json.update sidecars left by previous sessions.
     // The file watcher only fires for events that occur while the extension is
@@ -1883,7 +1889,10 @@ function activate(context) {
     );
 }
 
-function deactivate() {}
+function deactivate() {
+    try { aiu.deactivate(); }
+    catch { /* ignore */ }
+}
 
 module.exports = {
     activate,

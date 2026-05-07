@@ -113,6 +113,18 @@
       {
         "command": "ai.newContextFromTemplate",
         "title": "AI: New Context from Template"
+      },
+      {
+        "command": "ai.aiuInit",
+        "title": "AI Understanding: Initialize"
+      },
+      {
+        "command": "ai.aiuStatus",
+        "title": "AI Understanding: Show Status"
+      },
+      {
+        "command": "ai.aiuRefresh",
+        "title": "AI Understanding: Refresh"
       }
     ],
     "keybindings": [

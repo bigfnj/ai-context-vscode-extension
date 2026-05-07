@@ -339,6 +339,138 @@ function testListTrackedExcludesAiuRoot() {
     rm(root);
 }
 
+// ─── computeStatus / staleness ──────────────────────────────────────────────
+
+function testComputeStatusUninitialized() {
+    const root = fixtureProject();
+    const s = u.computeStatus(root);
+    assert.strictEqual(s.initialized, false);
+    // Without _meta we use defaults — every tracked file is "untracked" until bootstrap.
+    assert.strictEqual(s.untracked.length, 4);
+    assert.strictEqual(s.fresh.length, 0);
+    assert.strictEqual(s.stale.length, 0);
+    assert.strictEqual(s.orphan.length, 0);
+    rm(root);
+}
+
+function testComputeStatusCleanAfterBootstrap() {
+    const root = fixtureProject();
+    u.generateSkeleton(root);
+    const s = u.computeStatus(root);
+    assert.strictEqual(s.initialized, true);
+    assert.strictEqual(s.fresh.length, 4);
+    assert.strictEqual(s.stale.length, 0);
+    assert.strictEqual(s.untracked.length, 0);
+    assert.strictEqual(s.orphan.length, 0);
+    assert.strictEqual(u.isClean(s), true);
+    rm(root);
+}
+
+function testComputeStatusDetectsStale() {
+    const root = fixtureProject();
+    u.generateSkeleton(root);
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log("modified");\n');
+    const s = u.computeStatus(root);
+    assert.deepStrictEqual(s.stale, ['src/a.js']);
+    assert.strictEqual(s.fresh.length, 3);
+    assert.strictEqual(u.isClean(s), false);
+    rm(root);
+}
+
+function testComputeStatusDetectsUntracked() {
+    const root = fixtureProject();
+    u.generateSkeleton(root);
+    fs.writeFileSync(path.join(root, 'src', 'newfile.js'), '// new\n');
+    const s = u.computeStatus(root);
+    assert.deepStrictEqual(s.untracked, ['src/newfile.js']);
+    assert.strictEqual(u.isClean(s), false);
+    rm(root);
+}
+
+function testComputeStatusDetectsOrphan() {
+    const root = fixtureProject();
+    u.generateSkeleton(root);
+    fs.unlinkSync(path.join(root, 'src', 'b.js'));
+    const s = u.computeStatus(root);
+    assert.deepStrictEqual(s.orphan, ['src/b.js']);
+    assert.strictEqual(u.isClean(s), false);
+    rm(root);
+}
+
+function testComputeStatusRespectsCustomGlobs() {
+    const root = fixtureProject();
+    u.generateSkeleton(root, {
+        tracked_globs: { include: ['src/**'], exclude: [] },
+    });
+    const s = u.computeStatus(root);
+    // Only src/* should be tracked. test/ and package.json drop out of fresh AND
+    // out of orphan (their .aiu.json was never written).
+    assert.deepStrictEqual(s.fresh.sort(), ['src/a.js', 'src/b.js']);
+    assert.strictEqual(s.orphan.length, 0);
+    rm(root);
+}
+
+function testFormatStatusBar() {
+    assert.strictEqual(u.formatStatusBar(null), 'AIU: ?');
+    assert.strictEqual(
+        u.formatStatusBar({ initialized: false, fresh: [], stale: [], untracked: [], orphan: [] }),
+        'AIU: not initialized'
+    );
+    assert.strictEqual(
+        u.formatStatusBar({ initialized: true, fresh: ['a'], stale: [], untracked: [], orphan: [] }),
+        'AIU: clean'
+    );
+    assert.strictEqual(
+        u.formatStatusBar({
+            initialized: true,
+            fresh: [],
+            stale: ['a', 'b', 'c'],
+            untracked: ['d'],
+            orphan: [],
+        }),
+        'AIU: 3 stale, 1 untracked'
+    );
+    assert.strictEqual(
+        u.formatStatusBar({
+            initialized: true,
+            fresh: [],
+            stale: ['a'],
+            untracked: ['b'],
+            orphan: ['c', 'd'],
+        }),
+        'AIU: 1 stale, 1 untracked, 2 orphan'
+    );
+}
+
+// ─── aiu.buildTooltip (pure formatter — no vscode runtime needed) ───────────
+
+function testBuildTooltip() {
+    // Stub out vscode require for this test only — buildTooltip itself doesn't
+    // call into vscode, but loading aiu.js does `require('vscode')`.
+    const Module = require('module');
+    const originalLoad = Module._load;
+    Module._load = function load(request, parent, isMain) {
+        if (request === 'vscode') return {};
+        return originalLoad.call(this, request, parent, isMain);
+    };
+    delete require.cache[require.resolve('../src/aiu')];
+    const aiu = require('../src/aiu');
+    Module._load = originalLoad;
+
+    assert.strictEqual(aiu.buildTooltip(null), 'AI Understanding');
+    assert.ok(aiu.buildTooltip({ initialized: false, fresh: [], stale: [], untracked: [], orphan: [] })
+        .includes('not initialized'));
+    assert.ok(aiu.buildTooltip({ initialized: true, fresh: ['a', 'b'], stale: [], untracked: [], orphan: [] })
+        .includes('clean'));
+    const tt = aiu.buildTooltip({
+        initialized: true, fresh: [],
+        stale: ['s1', 's2'], untracked: ['u1'], orphan: [],
+    });
+    assert.ok(tt.includes('stale (2)'));
+    assert.ok(tt.includes('untracked (1)'));
+    assert.ok(tt.includes('Click for details'));
+}
+
 // ─── Run ─────────────────────────────────────────────────────────────────────
 
 const tests = [
@@ -371,6 +503,14 @@ const tests = [
     testMakeSkeletonEntry,
     testGenerateSkeletonOnFixture,
     testListTrackedExcludesAiuRoot,
+    testComputeStatusUninitialized,
+    testComputeStatusCleanAfterBootstrap,
+    testComputeStatusDetectsStale,
+    testComputeStatusDetectsUntracked,
+    testComputeStatusDetectsOrphan,
+    testComputeStatusRespectsCustomGlobs,
+    testFormatStatusBar,
+    testBuildTooltip,
 ];
 
 let failed = 0;

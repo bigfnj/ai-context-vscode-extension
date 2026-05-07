@@ -497,6 +497,87 @@ function generateSkeleton(projectRoot, opts) {
     return { files, meta };
 }
 
+// ─── Status / staleness ──────────────────────────────────────────────────────
+
+// Returns:
+//   {
+//     initialized: bool,         // _meta.json exists
+//     fresh: string[],           // tracked, sidecar present, sha1 matches
+//     stale: string[],           // tracked, sidecar present, sha1 differs
+//     untracked: string[],       // tracked, sidecar missing
+//     orphan: string[],          // sidecar present, source missing (project-rel paths)
+//     trackedGlobs: object,      // resolved globs (from meta if present, else defaults)
+//   }
+//
+// Counts are derivable from array lengths. "AIU-clean" when stale/untracked/orphan
+// are all empty and initialized is true.
+function computeStatus(projectRoot) {
+    const result = {
+        initialized: fs.existsSync(metaPathFor(projectRoot)),
+        fresh: [],
+        stale: [],
+        untracked: [],
+        orphan: [],
+        trackedGlobs: null,
+    };
+
+    let trackedGlobs = DEFAULT_TRACKED_GLOBS;
+    if (result.initialized) {
+        try {
+            const meta = readMeta(projectRoot);
+            if (meta && meta.tracked_globs) trackedGlobs = meta.tracked_globs;
+        } catch { /* fall through to defaults */ }
+    }
+    result.trackedGlobs = trackedGlobs;
+
+    const sourceFiles = listTrackedSourceFiles(projectRoot, trackedGlobs);
+    const sourceSet = new Set(sourceFiles);
+    const entryPaths = listEntries(projectRoot);
+    const entrySet = new Set(entryPaths);
+
+    for (const rel of sourceFiles) {
+        if (!entrySet.has(rel)) {
+            result.untracked.push(rel);
+            continue;
+        }
+        let entrySha;
+        try { entrySha = readEntry(projectRoot, rel).sha1; }
+        catch { result.untracked.push(rel); continue; }
+        const fileSha = sha1File(path.join(projectRoot, rel));
+        if (entrySha === fileSha) result.fresh.push(rel);
+        else result.stale.push(rel);
+    }
+
+    for (const rel of entryPaths) {
+        if (!sourceSet.has(rel)) result.orphan.push(rel);
+    }
+
+    return result;
+}
+
+function isClean(status) {
+    return !!status
+        && status.initialized
+        && status.stale.length === 0
+        && status.untracked.length === 0
+        && status.orphan.length === 0;
+}
+
+// One-line summary suitable for a status bar.
+//   not initialized        → "AIU: not initialized"
+//   clean                  → "AIU: clean"
+//   needs work             → "AIU: 3 stale, 1 untracked"
+function formatStatusBar(status) {
+    if (!status) return 'AIU: ?';
+    if (!status.initialized) return 'AIU: not initialized';
+    if (isClean(status)) return 'AIU: clean';
+    const parts = [];
+    if (status.stale.length)     parts.push(`${status.stale.length} stale`);
+    if (status.untracked.length) parts.push(`${status.untracked.length} untracked`);
+    if (status.orphan.length)    parts.push(`${status.orphan.length} orphan`);
+    return `AIU: ${parts.join(', ')}`;
+}
+
 function readPackageName(projectRoot) {
     const pkgPath = path.join(projectRoot, 'package.json');
     if (!fs.existsSync(pkgPath)) return null;
@@ -535,4 +616,8 @@ module.exports = {
     detectFrameworks,
     listTrackedSourceFiles,
     generateSkeleton,
+
+    computeStatus,
+    isClean,
+    formatStatusBar,
 };
