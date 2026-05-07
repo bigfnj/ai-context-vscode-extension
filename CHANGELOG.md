@@ -5,22 +5,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — AI Understanding (Phases 3–5)
+## [4.0.0] — AI Understanding: feature-complete
 
-Tracks the remaining work to complete the AI Understanding feature introduced
-in 3.12.0. Spec: `AI_UNDERSTANDING_FORMAT.md`. The 4.0.0 release ships when
-all three phases below are done.
+Closes out the five-phase rollout of AI Understanding. The major bump signals
+that a new top-level capability area lands alongside the existing AI Context
+Runner — both ship in the same extension, both are independent, and both
+auto-inject into the same agent files behind separate fenced blocks.
 
-### Planned
+### Added
 
-- **Phase 3** — `CLAUDE.md` auto-block injection of `AIU_STALE`,
-  `AIU_UNTRACKED`, `AIU_ORPHAN` arrays (spec §8.3) so AI agents see the
-  freshness signal each session. Matching update to AGENTS.md edit rules
-  for Codex parity.
-- **Phase 4** — Pre-commit hook script (block-narrow mode, spec §9) plus a
-  Settings panel section for opt-in install / status / uninstall.
-- **Phase 5** — Bootstrap AI Understanding on the extension itself, so this
-  repo ships with its own filled-in `AI_UNDERSTANDING/` tree.
+- **Phase 3 — CLAUDE.md / AGENTS.md auto-injection** (`97ee4cf`).
+  - `understanding.buildAiuInjectionBlock(status)` — pure formatter for the
+    fenced block: `AIU_STALE=[…]` / `AIU_UNTRACKED=[…]` / `AIU_ORPHAN=[…]`
+    plus the spec §8 agent rules (same-turn sidecar updates; work the list
+    before other work; only bump `last_audit_commit` when all lists are
+    empty; no mass edits outside bootstrap; no orphan creation).
+  - `inject.AIU_INJECT_START` / `AIU_INJECT_END` — separate fence pair from
+    AI_CTX so the two injectors never overlap.
+  - `inject.injectMarkedBlock` is now idempotent: skips writes when content
+    is unchanged. Prevents the AIU file watcher from looping on its own
+    writes. (Side benefit: the AI_CTX path also avoids needless writes.)
+  - `aiu.refreshStatus()` syncs the AIU block into target files that already
+    exist (the AI_CTX path owns first-time CLAUDE.md/AGENTS.md creation).
+    Clears the block when `AI_UNDERSTANDING/` is removed.
+
+- **Phase 4 — Pre-commit hook + settings UI** (`54be1a9`).
+  - `cli/aiu-precommit.js` — self-contained Node hook driver per spec §9
+    (block-narrow mode). Reads `tracked_globs` from `_meta.json`. For each
+    staged source file: blocks if its `.aiu.json` sidecar is missing in the
+    staged tree or sha1 differs from sha1 of the staged source. Blocks
+    deletion of a `.aiu.json` when the matching source is not also deleted.
+    No `_meta.json` = no contract = exit 0. Override:
+    `git commit --no-verify`.
+  - `src/hook.js` — installer. Copies the driver into `.git/hooks/` so the
+    hook is self-contained per-repo and survives extension upgrades. Backs
+    up any pre-existing user `pre-commit` hook to `pre-commit.aiu-backup`;
+    uninstall restores from backup.
+  - Two new commands: `AI Understanding: Install Pre-Commit Hook` and
+    `…: Uninstall Pre-Commit Hook`.
+  - Settings webview gains an "AI Understanding" section: status summary,
+    fresh/stale/untracked/orphan counts, hook install state, and
+    context-sensitive action buttons (Initialize / Show Status / Refresh /
+    Install or Uninstall Hook).
+
+- **Phase 5 — Self-bootstrap** (`4b5016f`).
+  - `AI_UNDERSTANDING/` now ships with the extension as a populated,
+    full-fidelity tree: 13 entries (package.json + 9 `src/*` + 2 `test/*` +
+    `cli/aiu-precommit.js`) with real purpose / exports / imports /
+    called_by / calls_out_to / invariants / gotchas. `_meta.json` extends
+    `DEFAULT_TRACKED_GLOBS` with `cli/**` so the standalone hook driver is
+    in scope; `last_audit_commit` anchors to the parent commit.
+
+### Changed
+
+- **`tracked_globs.exclude` defaults** — projects extending the defaults can
+  opt to add `AI_UNDERSTANDING/**` themselves. The extension's own
+  `_meta.json` does so to prevent recursion.
+
+### Tests
+
+- Total goes from 37 (3.12.0) to 56. New coverage:
+  - Block formatter for uninitialized / clean / populated states + agent-rule
+    presence assertions.
+  - `injectMarkedBlock` idempotence and in-place update without
+    duplication.
+  - Hook installer: install / reinstall / backup / uninstall / restore-backup
+    / noop / non-git-rejection.
+  - End-to-end pre-commit: spawn the actual driver against tmp git repos —
+    no-meta no-op, clean-commit pass, missing-sidecar block, stale-sidecar
+    block, orphan-deletion block, paired-deletion pass.
+
+### Notes
+
+- No breaking changes to the AI Context Runner side. The major bump reflects
+  the introduction of a new capability area, not API churn.
 
 ---
 

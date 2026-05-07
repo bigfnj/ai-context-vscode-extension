@@ -159,6 +159,66 @@ codex debug prompt-input "probe context"
 
 The output should include an `AGENTS.md instructions for ...` block containing `AI_CONTEXT`.
 
+## AI Understanding
+
+A second, independent capability shipped alongside the context runner: a per-project,
+git-tracked, machine-edited model of the codebase under `AI_UNDERSTANDING/`. Each
+tracked source file gets a sidecar `AI_UNDERSTANDING/<path>.aiu.json` with its
+purpose, exports, imports, called-by edges, invariants, and gotchas. The
+extension auto-injects a freshness signal into the same agent files (CLAUDE.md /
+AGENTS.md / etc.) every session so AI agents see — and update — the model as
+they edit.
+
+Spec and contract: [`AI_UNDERSTANDING_FORMAT.md`](AI_UNDERSTANDING_FORMAT.md).
+That file is the source of truth for the schema, validator rules, update
+protocol, and pre-commit hook policy.
+
+```text
+You: AI Understanding: Initialize
+  → extension walks tracked globs (src/**, test/**, package.json, etc.)
+  → writes skeleton AI_UNDERSTANDING/<path>.aiu.json per file (purpose:"TODO")
+  → writes AI_UNDERSTANDING/_meta.json with detected frameworks
+
+Have your AI agent fill in purpose / exports / imports / invariants
+  → (just open Claude or Codex; CLAUDE.md / AGENTS.md auto-injection
+     tells the agent the rules and which entries are stale)
+
+You edit a source file
+  → file watcher recomputes status (250ms debounce)
+  → status bar updates: "AIU: 1 stale"
+  → CLAUDE.md / AGENTS.md AIU block updates with AIU_STALE=["src/foo.js"]
+  → next AI session sees the stale list and refreshes that sidecar
+
+You commit
+  → optional pre-commit hook (block-narrow): rejects the commit if
+    any staged source file is missing its sidecar or its sha1 doesn't
+    match the staged content
+  → override per commit: git commit --no-verify
+```
+
+A status bar item on the left shows current state:
+
+| State | Reading |
+|---|---|
+| Not initialized | `AIU: not initialized` |
+| All entries match source | `AIU: clean` |
+| Some entries are out of date | `AIU: 3 stale, 1 untracked` |
+| A `.aiu.json` exists for a deleted file | `AIU: 1 orphan` |
+
+Click the status bar to open a quick pick of the offending entries; pick one to
+open it.
+
+The pre-commit hook is opt-in. Install it from the **AI Context Runner** sidebar
+(AI Understanding section → "Install Pre-Commit Hook") or via the command
+`AI Understanding: Install Pre-Commit Hook`. The hook is self-contained per
+repo (a copy of the driver lives in `.git/hooks/`), so it survives extension
+upgrades and works for collaborators after they install it themselves. Any
+pre-existing user `pre-commit` hook is backed up to `pre-commit.aiu-backup` and
+restored on uninstall.
+
+The extension itself dogfoods this: see [`AI_UNDERSTANDING/`](AI_UNDERSTANDING/)
+in this repo for a fully populated example.
+
 ## Requirements
 
 - VS Code 1.80+
@@ -261,6 +321,11 @@ for the current window.
 | `AI: Delete Context` | — | Permanently delete a context |
 | `AI: Clean Up Contexts` | — | Bulk archive or delete — orphan detection, age display |
 | `AI: Restore Archived Context` | — | Restore a previously archived context |
+| `AI Understanding: Initialize` | — | Bootstrap `AI_UNDERSTANDING/` for the workspace (skeleton entries + `_meta.json`) |
+| `AI Understanding: Show Status` | — | Quick pick of stale / untracked / orphan entries; click to open |
+| `AI Understanding: Refresh` | — | Recompute status and refresh the status bar + injected block |
+| `AI Understanding: Install Pre-Commit Hook` | — | Opt in to spec §9 block-narrow hook (`.git/hooks/pre-commit`) |
+| `AI Understanding: Uninstall Pre-Commit Hook` | — | Remove the hook (restores any backed-up user hook) |
 
 ## Auto-detection behavior
 
