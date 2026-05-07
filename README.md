@@ -45,13 +45,17 @@ always derived from the store.
 Click the **AI Context** icon in the VS Code Activity Bar to open the sidebar panel.
 It shows:
 
-- **Active Context** — name, path, Reinject and Switch buttons. When you switch
-  projects, the previous context appears below as a dashed card; click "Make Active"
-  to swap back instantly.
+- **Active Context** — name, path, health indicator (●), and action buttons:
+  - **↺ Reinject** — re-write all agent files from the current context state
+  - **⇄ Switch** — pick a different active context
+  - **⧉ Duplicate** — clone the active context with a new name
+  - **⊞ Save as Template** — save the active context as a reusable template (strips actions/state)
+  - Previous context card appears below on switch; click "Make Active" to swap back instantly.
 - **Projects** — all tracked contexts with last-used times. Create new contexts here.
+- **Templates** — list of saved templates. Use **+ New from Template** to create a pre-filled context.
+- **Codex Settings** — sandbox mode toggle and trust level dropdown.
 - **Permissions** — unified allow list for the active context (shared by Claude and
-  Codex), Codex trust level dropdown (includes `full-auto`), and an Advanced
-  Permissions button.
+  Codex), Codex safe commands, and an Advanced Permissions button.
 - **Behaviour** — toggles for all extension settings.
 - **Agents** — checkboxes for which AI agents receive context injection.
 - **About** — version and projects root.
@@ -168,7 +172,7 @@ take effect on reload without repackaging:
 ```bash
 mkdir -p ~/.vscode-server/extensions
 ln -s /path/to/ai-context-extension \
-      ~/.vscode-server/extensions/local.ai-context-runner-3.1.0
+      ~/.vscode-server/extensions/local.ai-context-runner-3.11.0
 ```
 
 Then reload VS Code:
@@ -246,7 +250,12 @@ for the current window.
 | `AI: Set Active Context` | `Ctrl+Alt+S` | Manually set which context is active for this window |
 | `AI: Reinject Active Context` | `Ctrl+Alt+R` | Re-inject current context into all agent files |
 | `AI: Config` | `Ctrl+Alt+C` | Interactive configuration menu |
+| `AI: Search Contexts` | `Ctrl+Alt+F` | Search all contexts by name, path, notes, files, or decisions |
 | `AI: New Context` | — | Create a new context and bind it to a project folder |
+| `AI: Duplicate Context` | — | Clone an existing context with a new name |
+| `AI: Health Check` | — | Scan all contexts for issues — missing roots, stale files, error flags |
+| `AI: Save as Template` | — | Save the active context as a reusable template (strips actions/state) |
+| `AI: New Context from Template` | — | Create a new context pre-filled from a saved template |
 | `AI: View Context` | — | Open a context file as formatted JSON |
 | `AI: Manage Permissions` | — | View, remove, or adjust per-project permissions and Codex trust level |
 | `AI: Delete Context` | — | Permanently delete a context |
