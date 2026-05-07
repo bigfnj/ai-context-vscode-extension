@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "path": "src/claude.js",
+  "sha1": "18d2c7d3736568da87ebd7e8eba5ecb227edaf17",
+  "purpose": "Claude CLI orchestration. Builds the prompt envelope (context JSON + task), spawns the `claude` CLI as a child process with stdin/stdout piping, and parses the trailing CTX_UPDATE: line from the response to round-trip context state.",
+  "exports": [
+    "getCliPath",
+    "buildPrompt",
+    "extractContextUpdate",
+    "stripContextUpdate",
+    "runWithClaude"
+  ],
+  "imports": [
+    "vscode",
+    "child_process (spawn)",
+    "./inject (buildAgentContext)"
+  ],
+  "called_by": [
+    "src/extension.js"
+  ],
+  "calls_out_to": [
+    "vscode.workspace.getConfiguration('aiContext').get('cliPath')",
+    "child_process.spawn('claude', ['-p', '--output-format', 'text', '-'])"
+  ],
+  "invariants": [
+    "The CTX_UPDATE: prefix (no space) is the exact separator; extractContextUpdate scans backward from response end to skip JSON examples in preamble.",
+    "extractContextUpdate returns null on invalid JSON or missing line — never partial updates.",
+    "runWithClaude rejects with a custom message on ENOENT (CLI not installed); other spawn errors propagate.",
+    "Prompt envelope passes the projected agent context (via inject.buildAgentContext) so the CLI sees the same shape that CLAUDE.md auto-block contains."
+  ],
+  "gotchas": [
+    "extractContextUpdate scans from bottom-up: a code block in the response containing the literal text \"CTX_UPDATE:\" can confuse it.",
+    "stripContextUpdate filters all lines starting with `CTX_UPDATE:` globally — the user logging that prefix in their own output is also stripped.",
+    "spawn `shell: true` is set only on Windows; POSIX shells use array-form arg parsing — quoting differs."
+  ]
+}

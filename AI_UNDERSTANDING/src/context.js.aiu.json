@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "path": "src/context.js",
+  "sha1": "c30f0124d06863cf4c2d428e866859389eec2ed1",
+  "purpose": "Core context store — CRUD over per-project JSON files in ~/.ai-context/. Owns context lifecycle (create, normalize, save, archive, restore, delete), action compaction with per-field memory caps (b/d/c/f/h), legacy schema migration, project scanning, search, and template management.",
+  "exports": [
+    "DEFAULT_CONTEXT_VERSION",
+    "DEFAULT_MAX_ACTIONS",
+    "DEFAULT_MAX_HISTORY",
+    "getCtxDir",
+    "getArchiveDir",
+    "getWorkspaceRoot",
+    "getProjectsRoot",
+    "normalizePath",
+    "ensureDir",
+    "createDefaultContext",
+    "normalizeContext",
+    "summarizeActions",
+    "compactActions",
+    "listContexts",
+    "listArchivedContexts",
+    "loadContext",
+    "loadArchivedContext",
+    "saveContext",
+    "deleteContext",
+    "archiveContext",
+    "restoreArchivedContext",
+    "listProjectDirs",
+    "scanAndCreateContexts",
+    "formatRelativeTime",
+    "searchContexts",
+    "checkContextHealth",
+    "listTemplates",
+    "createFromTemplate"
+  ],
+  "imports": [
+    "vscode",
+    "fs",
+    "path",
+    "os"
+  ],
+  "called_by": [
+    "src/extension.js",
+    "src/inject.js",
+    "src/settingsView.js",
+    "src/claude.js",
+    "test/run-unit.js"
+  ],
+  "calls_out_to": [
+    "vscode.workspace.getConfiguration('aiContext') — projectsRoot, contextDir, maxActions",
+    "vscode.workspace.workspaceFolders",
+    "fs.* (read/write/rename/unlink JSON files in ~/.ai-context/)",
+    "os.homedir(), os.userInfo()"
+  ],
+  "invariants": [
+    "createdAt is set once on creation and preserved across saves; lastUsed is always overwritten with the current ISO timestamp.",
+    "perms.allow migrates from legacy perms.claude on read — old projects do not need a manual rename.",
+    "normalizeContext bounds memory list lengths (b ≤ 15, d/c ≤ 20, f ≤ 30, h ≤ 12); overflow on actions triggers compactActions which folds older actions into h.",
+    "Context version `v` is always upgraded to ≥ DEFAULT_CONTEXT_VERSION on read; corrupted files fall back to defaults rather than throwing."
+  ],
+  "gotchas": [
+    "normalizePath strips trailing slashes — root equality comparisons (e.g. scanAndCreateContexts) must round-trip through it before comparing.",
+    "archiveContext appends `_<timestamp>` to the name on collision with no user override of the suffix format.",
+    "loadContext on a malformed JSON file returns a default context with `e: \"ctx_parse_err\"` — masking the real error; check `e` to detect.",
+    "searchContexts is a linear scan with weighted scoring (name > root > note > files/decisions/constraints); no index — fine at < 1000 contexts."
+  ]
+}

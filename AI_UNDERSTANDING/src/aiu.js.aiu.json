@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "path": "src/aiu.js",
+  "sha1": "8f4cf09119b0d6e2a24dba1fbc67d2109421be28",
+  "purpose": "VS Code adapter for the AI Understanding subsystem. Registers five commands (aiuInit, aiuStatus, aiuRefresh, aiuInstallHook, aiuUninstallHook), owns a left-aligned status bar item, and keeps the AIU block in CLAUDE.md / AGENTS.md in sync via a debounced workspace watcher.",
+  "exports": [
+    "activate",
+    "deactivate",
+    "refreshStatus",
+    "buildTooltip",
+    "_internals"
+  ],
+  "imports": [
+    "vscode",
+    "fs",
+    "path",
+    "./understanding",
+    "./inject",
+    "./hook"
+  ],
+  "called_by": [
+    "src/extension.js"
+  ],
+  "calls_out_to": [
+    "vscode.window.createStatusBarItem",
+    "vscode.window.showInformationMessage",
+    "vscode.window.showWarningMessage",
+    "vscode.window.showErrorMessage",
+    "vscode.window.showQuickPick",
+    "vscode.workspace.openTextDocument",
+    "vscode.workspace.createFileSystemWatcher",
+    "vscode.workspace.onDidChangeWorkspaceFolders",
+    "vscode.commands.registerCommand",
+    "understanding.computeStatus / generateSkeleton / buildAiuInjectionBlock / formatStatusBar",
+    "inject.injectMarkedBlock / clearMarkedBlock / getInjectionTargets",
+    "hook.installHook / uninstallHook / isHookInstalled / isGitRepo"
+  ],
+  "invariants": [
+    "Status bar item is hidden when no workspace folder is open; otherwise always visible with current status text.",
+    "AIU block is only written to agent target files that already exist — the AI_CTX path owns first-time CLAUDE.md / AGENTS.md creation.",
+    "When AI_UNDERSTANDING/ does not exist (uninitialized), the AIU block is cleared from agent target files instead of written.",
+    "File watcher events are coalesced via 250ms debounce so a burst of saves only triggers one refreshStatus.",
+    "Failures in injection sync are caught and logged — they never break the status bar or the command surface."
+  ],
+  "gotchas": [
+    "createFileSystemWatcher uses **/* — VS Code's default file watcher excludes (node_modules, etc.) keep this affordable.",
+    "The injection sync writes through inject.injectMarkedBlock which is now idempotent — that is what prevents a watcher feedback loop.",
+    "cmdInit refuses without a {modal:true} confirm when AI_UNDERSTANDING/ already exists — re-bootstrap is destructive (overwrites all skeleton entries).",
+    "hookSourcePath() resolves to <ext-install>/cli/aiu-precommit.js; the file must exist or hook install throws."
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "path": "package.json",
+  "sha1": "d5789f1fd6e882127c0b1f26d9beb3b0f60ce703",
+  "purpose": "Extension manifest. Declares VS Code contributes (commands, keybindings, settings, views, viewsContainers) and runtime metadata (engines, activationEvents).",
+  "exports": [],
+  "imports": [],
+  "called_by": [
+    "src/extension.js",
+    "src/settingsView.js"
+  ],
+  "calls_out_to": [],
+  "invariants": [
+    "main field points to ./src/extension.js — the entrypoint VS Code loads.",
+    "engines.vscode constrains compatibility; bumping requires updating the README minimum.",
+    "activationEvents includes onStartupFinished so extension activates without explicit user action.",
+    "contributes.commands and src/extension.js + src/aiu.js registerCommand calls must agree on every id."
+  ],
+  "gotchas": [
+    "Adding a new command requires both a contributes.commands entry AND a registerCommand call — silent breakage if either is missed.",
+    "Configuration property keys collide with cfg.get(...) lookups across the codebase; renaming requires a code-wide search."
+  ]
+}

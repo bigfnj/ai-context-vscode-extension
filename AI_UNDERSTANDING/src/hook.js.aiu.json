@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "path": "src/hook.js",
+  "sha1": "c8c36da4eb06776b0dd5bd0585858e8dcfef5712",
+  "purpose": "Pre-commit hook installer / uninstaller for the AI_UNDERSTANDING contract. Copies cli/aiu-precommit.js into the target repo's .git/hooks/ so the hook is self-contained per-repo and survives extension version bumps. Backs up any pre-existing user pre-commit hook and restores it on uninstall.",
+  "exports": [
+    "HOOK_FILENAME",
+    "DRIVER_FILENAME",
+    "HOOK_MARKER",
+    "BACKUP_SUFFIX",
+    "isGitRepo",
+    "isHookInstalled",
+    "installHook",
+    "uninstallHook",
+    "hookPath",
+    "driverPath",
+    "backupPath",
+    "buildHookBody"
+  ],
+  "imports": [
+    "fs",
+    "path"
+  ],
+  "called_by": [
+    "src/aiu.js",
+    "src/settingsView.js",
+    "test/run-understanding.js"
+  ],
+  "calls_out_to": [
+    "fs.copyFileSync",
+    "fs.renameSync",
+    "fs.unlinkSync",
+    "fs.chmodSync (no-op on Windows)"
+  ],
+  "invariants": [
+    "A pre-existing user pre-commit hook is backed up to pre-commit.aiu-backup before our hook is installed — never overwritten without backup.",
+    "isHookInstalled returns true only when the file exists AND contains HOOK_MARKER — distinguishes our hook from arbitrary user content.",
+    "uninstallHook restores the backup if present, otherwise removes our hook outright; never leaves the repo without a hook by accident if the user had one.",
+    "The driver script (aiu-precommit.js) is copied into .git/hooks/ rather than referenced from the extension install path — survives extension reinstall/update."
+  ],
+  "gotchas": [
+    "fs.chmodSync is wrapped in try/catch — Windows does not honor the +x bit, but git-for-windows resolves the shebang anyway.",
+    "Does not handle .git as a worktree pointer file (`gitdir: ...`) — assumes plain .git directory. Worktree projects need extra work.",
+    "buildHookBody embeds the absolute driver path — if the project moves on disk, the hook breaks until reinstalled."
+  ]
+}

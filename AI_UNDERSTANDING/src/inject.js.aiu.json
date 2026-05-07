@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "path": "src/inject.js",
+  "sha1": "64a7d8e16aafdc07736f3eed6de422cdac34b1fe",
+  "purpose": "Builds and injects fenced AI_CONTEXT (session state) and AI_UNDERSTANDING (codebase model) blocks into agent files (CLAUDE.md, AGENTS.md, .github/copilot-instructions.md, .cursorrules, .windsurfrules) per the user's configured agents. Also handles Codex bootstrap files at projectsRoot/$HOME and .gitignore updates.",
+  "exports": [
+    "INJECT_START",
+    "INJECT_END",
+    "AIU_INJECT_START",
+    "AIU_INJECT_END",
+    "BOOTSTRAP_START",
+    "BOOTSTRAP_END",
+    "AGENT_CONTEXT_NAME",
+    "AGENT_TARGETS",
+    "getAgents",
+    "getInjectionTargets",
+    "findGitRepoRoots",
+    "getCodexTargets",
+    "buildAgentContext",
+    "buildInjectionBlock",
+    "buildMultiInjectionBlock",
+    "buildCodexBootstrapBlock",
+    "findInjectionRange",
+    "findMarkedRange",
+    "getGitignoreRoot",
+    "getValidContextRoot",
+    "injectIntoFile",
+    "clearInjection",
+    "injectMarkedBlock",
+    "clearMarkedBlock",
+    "getCodexBootstrapTarget",
+    "getCodexBootstrapTargets",
+    "autoInjectCodexBootstrap",
+    "clearCodexBootstrap",
+    "updateGitignore",
+    "clearInjectionForContext",
+    "autoInject",
+    "autoInjectMulti"
+  ],
+  "imports": [
+    "vscode",
+    "fs",
+    "path",
+    "./context"
+  ],
+  "called_by": [
+    "src/extension.js",
+    "src/aiu.js",
+    "src/settingsView.js",
+    "src/claude.js",
+    "test/run-unit.js"
+  ],
+  "calls_out_to": [
+    "vscode.workspace.getConfiguration('aiContext') — agents config",
+    "fs.* (read/write CLAUDE.md, AGENTS.md, .cursorrules, etc.)"
+  ],
+  "invariants": [
+    "AI_CTX (<!-- AI_CTX_START -->) and AI_UNDERSTANDING (<!-- AI_UNDERSTANDING_START -->) marker pairs are independent — the two injectors never overlap.",
+    "injectMarkedBlock is idempotent: skips fs.writeFileSync when the resulting content equals existing — prevents the AIU watcher feedback loop.",
+    "kilo and codex agents both target AGENTS.md; getInjectionTargets dedupes so a single file is written once.",
+    "findGitRepoRoots scans ≤ CODEX_REPO_SCAN_MAX_DEPTH levels deep, skipping node_modules / dist / build / etc.",
+    "updateGitignore groups paths by their nearest .gitignore so nested git repos do not mix entries."
+  ],
+  "gotchas": [
+    "getCodexBootstrapTargets writes to BOTH projectsRoot/AGENTS.md AND $HOME/AGENTS.md — Codex sessions started from anywhere under home can find the bootstrap.",
+    "Calling injectMarkedBlock on a file with a missing end marker creates a fresh block at EOF; orphaned start markers are not auto-repaired.",
+    "AGENT_TARGETS map is keyed by agent id (claude, codex, copilot, cursor, windsurf, kilo) — adding a new agent requires both this map and the package.json enum."
+  ]
+}

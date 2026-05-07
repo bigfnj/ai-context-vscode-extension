@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "path": "test/run-unit.js",
+  "sha1": "2886cf06cd47488e8506fbd5c05da7f3c408d16f",
+  "purpose": "Original unit test suite for the core extension (context, inject, claude, extension, permissions modules). Stubs the `vscode` module via Module._load before requires so tests run in plain Node without a VS Code host.",
+  "exports": [],
+  "imports": [
+    "assert",
+    "fs",
+    "os",
+    "path",
+    "Module",
+    "../src/context",
+    "../src/inject",
+    "../src/claude",
+    "../src/extension",
+    "../src/permissions"
+  ],
+  "called_by": [
+    "npm test"
+  ],
+  "calls_out_to": [
+    "fs.mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync",
+    "Module._load override (mockVscode injection)"
+  ],
+  "invariants": [
+    "mockVscode is installed via Module._load BEFORE any src/* requires — every module sees the stub.",
+    "Each test creates its own tmpDir; tests do not share state.",
+    "Test functions are called sequentially at file end; final `console.log(\"unit tests passed\")` only runs if all assertions held."
+  ],
+  "gotchas": [
+    "The Module._load override is NEVER restored — it persists for the lifetime of the process. Tests in a future runner that share this process must account for that.",
+    "The \"fatal: not a git repository\" line in test output comes from extension.js git-log probe firing in a non-repo tmp dir; benign."
+  ]
+}

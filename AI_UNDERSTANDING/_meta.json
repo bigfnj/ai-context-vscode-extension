@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "project": "ai-context-runner",
+  "last_audit_commit": "54be1a9",
+  "last_audit_at": "2026-05-07T20:00:52Z",
+  "generator": "ai-context-runner/3.12.0",
+  "overview": "Single-window VS Code extension. Two related but independent capabilities: (1) AI Context Runner — auto-injects per-project AI_CONTEXT JSON into agent files (CLAUDE.md / AGENTS.md / .cursorrules / etc.), captures permission grants from ~/.claude and ~/.codex, syncs Codex trust + sandbox modes; (2) AI Understanding — git-tracked, machine-edited model of the codebase under AI_UNDERSTANDING/ with sha1-based staleness, validator, sweep injection into agent files, and an opt-in pre-commit hook (block-narrow mode). Schema spec: AI_UNDERSTANDING_FORMAT.md.",
+  "frameworks": [
+    {
+      "name": "VS Code Extension API",
+      "version": "^1.80.0"
+    },
+    {
+      "name": "Node.js"
+    }
+  ],
+  "test_command": "node test/run-unit.js && node test/run-understanding.js",
+  "tracked_globs": {
+    "include": [
+      "src/**",
+      "test/**",
+      "tests/**",
+      "__tests__/**",
+      "package.json",
+      "*.config.{js,ts,json,mjs,cjs}",
+      "tsconfig.json",
+      "vite.config.*",
+      "webpack.config.*",
+      "cli/**"
+    ],
+    "exclude": [
+      "node_modules/**",
+      "dist/**",
+      "build/**",
+      "out/**",
+      "coverage/**",
+      "*.lock",
+      "package-lock.json",
+      "yarn.lock",
+      "pnpm-lock.yaml",
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.jpeg",
+      "**/*.gif",
+      "**/*.svg",
+      "**/*.ico",
+      "**/*.woff",
+      "**/*.woff2",
+      "**/*.ttf",
+      "**/*.eot",
+      ".vscode-test/**",
+      ".git/**",
+      "AI_UNDERSTANDING/**"
+    ]
+  },
+  "graph": "extension.js -> aiu.js (activate AI Understanding subsystem)\nextension.js -> context.js (CRUD ~/.ai-context/*.json)\nextension.js -> inject.js (AI_CTX block into CLAUDE.md/AGENTS.md)\nextension.js -> permissions.js (Claude/Codex perm sync)\nextension.js -> claude.js (run claude CLI for the AI: Run Task command)\nextension.js -> settingsView.js (sidebar webview)\naiu.js -> understanding.js (computeStatus, generateSkeleton, formatStatusBar)\naiu.js -> inject.js (AIU block injection via injectMarkedBlock)\naiu.js -> hook.js (install/uninstall pre-commit hook)\nsettingsView.js -> understanding.js, hook.js (status section state)\ninject.js -> context.js (paths, normalizePath, getCtxDir)\nclaude.js -> inject.js (buildAgentContext for prompt envelope)\n.git/hooks/pre-commit -> .git/hooks/aiu-precommit.js (copied from cli/aiu-precommit.js at install)"
+}

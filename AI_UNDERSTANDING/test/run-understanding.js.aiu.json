@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "path": "test/run-understanding.js",
+  "sha1": "25e5ad2ecb9c9a673e2f21250e240e3420a3014c",
+  "purpose": "Test suite for the AI Understanding subsystem. Covers sha1, glob matching, validators, CRUD, skeleton generation, status (staleness) computation, AIU injection block formatter, idempotent injectMarkedBlock, hook installer, and end-to-end pre-commit hook integration against real tmp git repos.",
+  "exports": [],
+  "imports": [
+    "assert",
+    "child_process (execFileSync, spawnSync)",
+    "crypto",
+    "fs",
+    "os",
+    "path",
+    "../src/understanding",
+    "../src/hook"
+  ],
+  "called_by": [
+    "npm test"
+  ],
+  "calls_out_to": [
+    "execFileSync('git', [...]) — init, add, commit, config in tmp repos",
+    "spawnSync('node', [HOOK_SOURCE], {cwd: tmp}) — run the hook driver against fixtures",
+    "fs.* for fixture setup and teardown"
+  ],
+  "invariants": [
+    "Each test creates an isolated tmp dir; rm() cleanup runs at end of every test path that succeeds.",
+    "tmpGitRepo() configures user.email / user.name / commit.gpgsign=false so tests do not depend on the host's global git config.",
+    "Hook integration tests invoke the actual cli/aiu-precommit.js via spawnSync — they verify real git interaction, not mocks."
+  ],
+  "gotchas": [
+    "Tests that mutate Module._load to stub vscode (e.g. testBuildTooltip, testInjectMarkedBlockIdempotent) MUST restore the original after their require — otherwise the stub leaks.",
+    "fixtureProject() creates node_modules/foo/ to verify it is excluded from tracked globs — removing this fixture would silently weaken the exclude-globs assertion.",
+    "Hook integration tests require `git` on PATH — there is no fallback if git is missing."
+  ]
+}

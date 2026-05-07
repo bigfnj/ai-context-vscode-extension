@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "path": "src/permissions.js",
+  "sha1": "7782ed249044e8687f731e5e8c78b4adb22321ae",
+  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, sandbox mode, full-auto alias, and the global approval_policy.",
+  "exports": [
+    "readClaudeSettings",
+    "writeClaudeSettings",
+    "readCodexConfig",
+    "writeCodexConfig",
+    "generalizeClaudePerm",
+    "isClaudePermCovered",
+    "captureNewClaudePerms",
+    "applyClaudePerms",
+    "updateCodexTomlContent",
+    "extractCodexTrust",
+    "applyCodexTrust",
+    "consolidatePermissionsToGlobal",
+    "applyCodexFullAuto",
+    "applyCodexSandboxMode",
+    "setCodexGlobalApprovalPolicy",
+    "setCodexApprovalPolicyNever",
+    "setCodexBashAlias",
+    "updateCodexGranularConfig",
+    "removeCodexGranularSection",
+    "extractCodexSafeCommands",
+    "setCodexSafeCommands",
+    "applyCodexSafeCommands",
+    "deriveSafeCommandsFromAllow",
+    "isRemovalCommand",
+    "filterRemovalCommands",
+    "hasRemovalCommands",
+    "purgeRemovalCommandsFromAllow",
+    "purgeRemovalMemory",
+    "listRemovalCommands",
+    "removeRemovalCommandFromClaudeGlobal",
+    "removeRemovalCommandFromCodex",
+    "probeCodexBinary",
+    "readCodexRulesFile",
+    "parseCodexRules",
+    "codexRulesToClaudeAllow",
+    "claudeAllowToCodexRules",
+    "formatCodexRule",
+    "applyCodexRulesFile",
+    "extractBashCommandFromCodexExec",
+    "isRuleSafeCommand",
+    "applyRemovalFilter",
+    "__test"
+  ],
+  "imports": [
+    "fs",
+    "path",
+    "os"
+  ],
+  "called_by": [
+    "src/extension.js",
+    "src/settingsView.js",
+    "test/run-unit.js"
+  ],
+  "calls_out_to": [
+    "fs.* on ~/.claude/settings.json, ~/.codex/config.toml, ~/.codex/rules/default.rules, ~/.bashrc",
+    "execFile('codex', ['--version']) — probeCodexBinary"
+  ],
+  "invariants": [
+    "Removal-command filter (rm, del, rmdir, erase, rd …) runs before generalization — destructive commands cannot be hidden behind wildcards.",
+    "Codex prefix_rule grammar rejects shell metacharacters (|&;<>$`), env-var prefixes, redirections, heredocs, and wildcards in tokens.",
+    "applyCodexSandboxMode does verify-and-revert: reads the file back after writing and reverts on any mismatch or I/O error.",
+    "setCodexApprovalPolicyNever unconditionally strips the legacy [approval_policy.granular] section — current Codex CLI rejects it as a non-unit variant.",
+    "consolidatePermissionsToGlobal promotes any perm appearing in ≥ 2 contexts to ~/.claude/settings.json and removes it from per-context stores."
+  ],
+  "gotchas": [
+    "isRuleSafeCommand rejects commands > 240 chars — long pipelines cannot be safe-commanded.",
+    "tokenizeCommand preserves quote marks within tokens; quote stripping is the caller's job.",
+    "claudeAllowToCodexRules outright rejects bare `Bash(*)` (too dangerous); strips a single trailing wildcard but rejects wildcards mid-pattern.",
+    "extractCodexTrust matches `[projects.\"<root>\"]` headers exactly — small whitespace differences cause it to insert a duplicate section.",
+    "applyCodexSandboxMode operates on per-project .codex/config.toml — NOT the global ~/.codex/config.toml — scope confusion is a recurring bug source."
+  ]
+}

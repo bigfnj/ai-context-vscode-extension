@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "path": "src/settingsView.js",
+  "sha1": "a144d35266d78602d08765bf6ad858080d79ac10",
+  "purpose": "Sidebar webview provider for the AI Context Runner panel. Renders sections (Active Context, Projects, Templates, AI Understanding, Codex Settings, Behaviour, Permissions, About), pushes state into the webview via postMessage, and dispatches button events back to extension commands.",
+  "exports": [
+    "SettingsViewProvider"
+  ],
+  "imports": [
+    "vscode",
+    "./context",
+    "./inject",
+    "./permissions",
+    "./understanding",
+    "./hook",
+    "../package.json (version)"
+  ],
+  "called_by": [
+    "src/extension.js"
+  ],
+  "calls_out_to": [
+    "vscode.workspace.getConfiguration('aiContext')",
+    "vscode.workspace.workspaceFolders",
+    "vscode.commands.executeCommand (forwards to ai.* commands)",
+    "context.listContexts / loadContext / saveContext / checkContextHealth / listTemplates",
+    "understanding.computeStatus / formatStatusBar",
+    "hook.isGitRepo / isHookInstalled",
+    "permissions.listRemovalCommands"
+  ],
+  "invariants": [
+    "refresh() short-circuits when _view is null or not visible — webview rebuilds happen only when the user is looking.",
+    "Each refresh rebuilds the entire view state from disk (contexts, perms, settings, AIU status) — there is no incremental update.",
+    "The AIU section computes against vscode.workspace.workspaceFolders[0]; with no workspace open it renders an empty-state message.",
+    "Button click messages are routed through vscode.commands.executeCommand so the webview never directly mutates extension state."
+  ],
+  "gotchas": [
+    "After dispatching an aiu* command, the handler calls this.refresh() so the panel reflects the new state — without this the post-action UI would lag until the next watcher fire.",
+    "JS template literals in this file are the webview source; escaping is via esc() — every interpolated string from disk MUST go through esc().",
+    "Adding a new section to the rendered HTML requires both a new section() call AND a state field in the postMessage payload — silent breakage if either is forgotten."
+  ]
+}

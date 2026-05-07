@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "path": "cli/aiu-precommit.js",
+  "sha1": "c6f2314f461173fe89c62d71b8a6073643cc2de5",
+  "purpose": "Pre-commit hook driver (block-narrow mode per AI_UNDERSTANDING_FORMAT.md §9). Self-contained Node script — copied into a target repo's .git/hooks/ at install time. Reads tracked_globs from _meta.json; for each staged source matched, blocks if the .aiu.json sidecar is missing in the staged tree or its sha1 differs from sha1 of the staged source. Blocks orphan sidecar deletions.",
+  "exports": [],
+  "imports": [
+    "crypto",
+    "child_process",
+    "fs",
+    "path"
+  ],
+  "called_by": [
+    ".git/hooks/pre-commit (after install)",
+    "test/run-understanding.js (subprocess integration tests)"
+  ],
+  "calls_out_to": [
+    "execFileSync('git', ['rev-parse', '--show-toplevel'])",
+    "execFileSync('git', ['diff', '--cached', '--name-only', '-z', '--diff-filter=...'])",
+    "execFileSync('git', ['show', ':<path>']) — staged content",
+    "execFileSync('git', ['cat-file', '-e', ':<path>']) — staged existence"
+  ],
+  "invariants": [
+    "No _meta.json = no contract = exit 0 (no-op). The hook only enforces what the project has opted into.",
+    "sha1 comparison uses STAGED content for both source and sidecar — unstaged working-tree changes are intentionally ignored.",
+    "Self-contained: depends only on Node builtins. The glob matcher is a copy of understanding.js#globToRegex (intentional duplication — hook must not require the extension to be installed).",
+    "Exit 0 = pass; exit 1 = block. Non-zero unexpected-error path also exits 1 with diagnostic to stderr."
+  ],
+  "gotchas": [
+    "Override is `git commit --no-verify` — printed in the failure message every time so the user always sees the escape hatch.",
+    "gitListStaged returns []  on any git error (e.g. partial index corruption) — failure-of-list-staged silently passes the commit.",
+    "The driver is COPIED into .git/hooks/aiu-precommit.js at install — editing src/cli/aiu-precommit.js in the extension repo does not update already-installed hooks until the user reinstalls."
+  ]
+}

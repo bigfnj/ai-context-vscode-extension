@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "path": "src/understanding.js",
+  "sha1": "ae7108e2b8108fa74179a8279ad6ba1a61e49ee2",
+  "purpose": "Pure-Node implementation of the AI_UNDERSTANDING schema-v1 contract from AI_UNDERSTANDING_FORMAT.md. Provides sha1, glob matching, validators (entry / meta / operation), per-file CRUD, status (fresh/stale/untracked/orphan) computation, and skeleton bootstrap. No vscode dependency — fully unit-testable.",
+  "exports": [
+    "SCHEMA_VERSION",
+    "MASS_EDIT_CAP",
+    "DEFAULT_TRACKED_GLOBS",
+    "aiuRoot",
+    "aiuPathFor",
+    "metaPathFor",
+    "sha1",
+    "sha1File",
+    "globToRegex",
+    "matchesAny",
+    "validateEntry",
+    "validateMeta",
+    "validateOperation",
+    "readEntry",
+    "writeEntry",
+    "deleteEntry",
+    "readMeta",
+    "writeMeta",
+    "listEntries",
+    "makeSkeletonEntry",
+    "makeSkeletonMeta",
+    "detectFrameworks",
+    "listTrackedSourceFiles",
+    "generateSkeleton",
+    "computeStatus",
+    "isClean",
+    "formatStatusBar",
+    "buildAiuInjectionBlock"
+  ],
+  "imports": [
+    "crypto",
+    "fs",
+    "path"
+  ],
+  "called_by": [
+    "src/aiu.js",
+    "src/settingsView.js",
+    "test/run-understanding.js"
+  ],
+  "calls_out_to": [
+    "fs.*",
+    "crypto.createHash('sha1')"
+  ],
+  "invariants": [
+    "sha1 is always 40 lowercase hex characters; validateEntry rejects any other shape.",
+    "validateOperation enforces the §7 33% mass-edit cap unless {bootstrap:true} is passed.",
+    "writeEntry refuses absolute paths and any rel path containing a `..` segment (path-traversal guard).",
+    "writeEntry calls validateEntry before fs.writeFileSync — invalid entries never hit disk.",
+    "generateSkeleton skips AI_UNDERSTANDING/ itself when walking the tree to avoid recursion."
+  ],
+  "gotchas": [
+    "Glob matcher is intentionally minimal (** / * / ? / brace alternation) — no full minimatch features (extglob, negation, etc.).",
+    "detectFrameworks reads package.json#engines.vscode + #engines.node; absence of engines but presence of dependencies still emits a generic \"Node.js\" entry.",
+    "computeStatus reads tracked_globs from _meta.json when initialized; falls back to DEFAULT_TRACKED_GLOBS otherwise — changing globs after bootstrap silently re-categorizes files.",
+    "The buildAiuInjectionBlock prose is what AI agents actually read each session — wording changes affect agent behavior."
+  ],
+  "key_functions": [
+    {
+      "name": "validateOperation",
+      "summary": "Enforces the spec §7 cross-entry mass-edit cap (≤33% of existing entries) unless bootstrap=true. Path-mirror is enforced at write-time via ensureSafeRelPath; orphan pairing is the hook's job."
+    },
+    {
+      "name": "generateSkeleton",
+      "summary": "Walks tracked globs, computes sha1 per file, writes skeleton entries with purpose:\"TODO\" plus a populated _meta.json. Validator runs in bootstrap mode so the >33% cap is bypassed."
+    },
+    {
+      "name": "computeStatus",
+      "summary": "Returns categorized {fresh, stale, untracked, orphan} arrays per spec §6 staleness table; isClean(status) is the project-wide audit-stamp gate."
+    }
+  ]
+}
