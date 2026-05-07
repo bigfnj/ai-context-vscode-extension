@@ -2,7 +2,7 @@
   "name": "ai-context-runner",
   "displayName": "AI Context Runner",
   "description": "Stateful AI session manager — auto-injects context into any AI agent on workspace open",
-  "version": "3.10.0",
+  "version": "3.11.0",
   "publisher": "local",
   "scripts": {
     "test": "node test/run-unit.js"
