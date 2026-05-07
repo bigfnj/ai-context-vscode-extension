@@ -5,6 +5,9 @@ const { ensureDir, normalizePath, getCtxDir } = require('./context');
 
 const INJECT_START = '<!-- AI_CTX_START -->';
 const INJECT_END   = '<!-- AI_CTX_END -->';
+
+const AIU_INJECT_START = '<!-- AI_UNDERSTANDING_START -->';
+const AIU_INJECT_END   = '<!-- AI_UNDERSTANDING_END -->';
 const BOOTSTRAP_START = '<!-- AI_CTX_BOOTSTRAP_START -->';
 const BOOTSTRAP_END   = '<!-- AI_CTX_BOOTSTRAP_END -->';
 const AGENT_CONTEXT_NAME = 'AI_CONTEXT';
@@ -207,12 +210,18 @@ function injectMarkedBlock(filePath, blockContent, startMarker, endMarker) {
     const block  = `${startMarker}\n${blockContent}\n${endMarker}`;
     const range  = findMarkedRange(existing, startMarker, endMarker);
 
+    let next;
     if (range) {
-        fs.writeFileSync(filePath, existing.slice(0, range.start) + block + existing.slice(range.end));
+        next = existing.slice(0, range.start) + block + existing.slice(range.end);
     } else {
         const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n\n' : '\n';
-        fs.writeFileSync(filePath, existing + sep + block + '\n');
+        next = existing + sep + block + '\n';
     }
+    // Idempotent: skip the write if nothing changed. Prevents the AIU file
+    // watcher from looping when our own write triggers a workspace change event.
+    if (next === existing) return false;
+    fs.writeFileSync(filePath, next);
+    return true;
 }
 
 function injectIntoFile(filePath, blockContent) {
@@ -431,6 +440,8 @@ function clearInjectionForContext(ctx) {
 module.exports = {
     INJECT_START,
     INJECT_END,
+    AIU_INJECT_START,
+    AIU_INJECT_END,
     BOOTSTRAP_START,
     BOOTSTRAP_END,
     AGENT_CONTEXT_NAME,
@@ -444,10 +455,13 @@ module.exports = {
     buildMultiInjectionBlock,
     buildCodexBootstrapBlock,
     findInjectionRange,
+    findMarkedRange,
     getGitignoreRoot,
     getValidContextRoot,
     injectIntoFile,
     clearInjection,
+    injectMarkedBlock,
+    clearMarkedBlock,
     getCodexBootstrapTarget,
     getCodexBootstrapTargets,
     autoInjectCodexBootstrap,

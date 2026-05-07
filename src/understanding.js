@@ -578,6 +578,66 @@ function formatStatusBar(status) {
     return `AIU: ${parts.join(', ')}`;
 }
 
+// ─── AIU block content for CLAUDE.md / AGENTS.md (spec §8.3) ────────────────
+
+// Returns the multi-line text body to be fenced inside the AIU markers in
+// CLAUDE.md / AGENTS.md. Pure — no I/O. Caller decides where to write it.
+//
+// The block is a session-time signal to the AI agent: which entries are
+// stale/untracked/orphan, plus the rules for how to act on them.
+function buildAiuInjectionBlock(status) {
+    const s = status || { initialized: false, stale: [], untracked: [], orphan: [] };
+    const lines = [];
+
+    if (!s.initialized) {
+        lines.push('AIU_STATUS=not_initialized');
+        lines.push(
+            'AI_UNDERSTANDING/ does not exist for this project. Run the ' +
+            '"AI Understanding: Initialize" command (or call ' +
+            'understanding.generateSkeleton) to bootstrap before populating ' +
+            'per-file entries. Spec: AI_UNDERSTANDING_FORMAT.md.'
+        );
+        return lines.join('\n');
+    }
+
+    lines.push(`AIU_STALE=${JSON.stringify(s.stale || [])}`);
+    lines.push(`AIU_UNTRACKED=${JSON.stringify(s.untracked || [])}`);
+    lines.push(`AIU_ORPHAN=${JSON.stringify(s.orphan || [])}`);
+    lines.push('');
+    lines.push(
+        'AI_UNDERSTANDING/ is the per-project codebase model — schema-v1, see ' +
+        'AI_UNDERSTANDING_FORMAT.md. Rules for this session:'
+    );
+    lines.push(
+        '- When you edit a tracked source file, update its ' +
+        'AI_UNDERSTANDING/<path>.aiu.json sidecar in the same turn (recompute ' +
+        'sha1, refresh exports/imports/called_by/calls_out_to, update ' +
+        'invariants/gotchas/purpose if relevant).'
+    );
+    lines.push(
+        '- When AIU_STALE / AIU_UNTRACKED / AIU_ORPHAN above are non-empty, ' +
+        'work the list (update / create / delete the named entries) before ' +
+        'doing other work this session.'
+    );
+    lines.push(
+        '- When all three lists are empty, you may bump ' +
+        '_meta.json#last_audit_commit to current HEAD and ' +
+        'last_audit_at to current ISO timestamp.'
+    );
+    lines.push(
+        '- Do not regenerate AI_UNDERSTANDING/ from scratch. Surgical, ' +
+        'incremental edits only — the validator rejects mass edits (>33% ' +
+        'of existing entries) outside bootstrap mode.'
+    );
+    lines.push(
+        '- Do not bump last_audit_commit without first confirming all three ' +
+        'lists are empty. Do not add entries for files that are not on disk. ' +
+        'Do not delete entries for files that are still on disk.'
+    );
+
+    return lines.join('\n');
+}
+
 function readPackageName(projectRoot) {
     const pkgPath = path.join(projectRoot, 'package.json');
     if (!fs.existsSync(pkgPath)) return null;
@@ -620,4 +680,5 @@ module.exports = {
     computeStatus,
     isClean,
     formatStatusBar,
+    buildAiuInjectionBlock,
 };

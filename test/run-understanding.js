@@ -442,6 +442,115 @@ function testFormatStatusBar() {
     );
 }
 
+// ─── buildAiuInjectionBlock (spec §8.3 + §8 rules) ───────────────────────────
+
+function testBuildAiuInjectionBlockUninitialized() {
+    const text = u.buildAiuInjectionBlock({ initialized: false });
+    assert.ok(text.includes('AIU_STATUS=not_initialized'));
+    assert.ok(text.includes('AI_UNDERSTANDING_FORMAT.md'));
+    // Must not include the AIU_STALE arrays when uninitialized.
+    assert.ok(!text.includes('AIU_STALE='));
+}
+
+function testBuildAiuInjectionBlockClean() {
+    const text = u.buildAiuInjectionBlock({
+        initialized: true,
+        fresh: ['src/a.js'],
+        stale: [], untracked: [], orphan: [],
+    });
+    assert.ok(text.includes('AIU_STALE=[]'));
+    assert.ok(text.includes('AIU_UNTRACKED=[]'));
+    assert.ok(text.includes('AIU_ORPHAN=[]'));
+    assert.ok(text.includes('last_audit_commit'));
+    assert.ok(text.includes('AI_UNDERSTANDING_FORMAT.md'));
+}
+
+function testBuildAiuInjectionBlockWithFiles() {
+    const text = u.buildAiuInjectionBlock({
+        initialized: true,
+        fresh: [],
+        stale: ['src/a.js', 'src/b.js'],
+        untracked: ['src/c.js'],
+        orphan: ['src/old.js'],
+    });
+    assert.ok(text.includes('AIU_STALE=["src/a.js","src/b.js"]'));
+    assert.ok(text.includes('AIU_UNTRACKED=["src/c.js"]'));
+    assert.ok(text.includes('AIU_ORPHAN=["src/old.js"]'));
+    // Each AIU_* line is parseable as JSON-array-after-equals.
+    const stale = JSON.parse(text.match(/AIU_STALE=(\[.*\])/)[1]);
+    assert.deepStrictEqual(stale, ['src/a.js', 'src/b.js']);
+}
+
+function testBuildAiuInjectionBlockHasAgentRules() {
+    const text = u.buildAiuInjectionBlock({
+        initialized: true,
+        fresh: [], stale: [], untracked: [], orphan: [],
+    });
+    // The §8 rules an AI agent must follow.
+    assert.ok(text.toLowerCase().includes('same turn'));      // §8.2
+    assert.ok(text.toLowerCase().includes('regenerate'));     // §8.4
+    assert.ok(text.toLowerCase().includes('mass edits'));     // §7 cross-entry rule 1
+    assert.ok(text.toLowerCase().includes('last_audit_commit')); // §8.3
+}
+
+// ─── inject.injectMarkedBlock idempotence ───────────────────────────────────
+
+function testInjectMarkedBlockIdempotent() {
+    // Stub vscode for inject.js
+    const Module = require('module');
+    const orig = Module._load;
+    Module._load = function(req, parent, isMain) {
+        if (req === 'vscode') return {
+            workspace: { workspaceFolders: null, getConfiguration: () => ({ get: () => null }) },
+        };
+        return orig.call(this, req, parent, isMain);
+    };
+    delete require.cache[require.resolve('../src/inject')];
+    const inj = require('../src/inject');
+    Module._load = orig;
+
+    const dir = tmpDir();
+    const file = path.join(dir, 'CLAUDE.md');
+    fs.writeFileSync(file, 'existing prose\n');
+
+    const wrote1 = inj.injectMarkedBlock(file, 'BODY', '<!-- S -->', '<!-- E -->');
+    const wrote2 = inj.injectMarkedBlock(file, 'BODY', '<!-- S -->', '<!-- E -->');
+    assert.strictEqual(wrote1, true);
+    assert.strictEqual(wrote2, false, 'second write with identical content should short-circuit');
+
+    const wrote3 = inj.injectMarkedBlock(file, 'CHANGED', '<!-- S -->', '<!-- E -->');
+    assert.strictEqual(wrote3, true);
+    rm(dir);
+}
+
+function testInjectMarkedBlockUpdatesInPlace() {
+    const Module = require('module');
+    const orig = Module._load;
+    Module._load = function(req, parent, isMain) {
+        if (req === 'vscode') return {
+            workspace: { workspaceFolders: null, getConfiguration: () => ({ get: () => null }) },
+        };
+        return orig.call(this, req, parent, isMain);
+    };
+    delete require.cache[require.resolve('../src/inject')];
+    const inj = require('../src/inject');
+    Module._load = orig;
+
+    const dir = tmpDir();
+    const file = path.join(dir, 'CLAUDE.md');
+    fs.writeFileSync(file, 'top\n\n<!-- S -->\nold\n<!-- E -->\n\nbottom\n');
+
+    inj.injectMarkedBlock(file, 'new', '<!-- S -->', '<!-- E -->');
+    const result = fs.readFileSync(file, 'utf8');
+    assert.ok(result.includes('top'));
+    assert.ok(result.includes('bottom'));
+    assert.ok(result.includes('<!-- S -->\nnew\n<!-- E -->'));
+    assert.ok(!result.includes('old'));
+    // Single occurrence of the marker pair (no duplication).
+    assert.strictEqual(result.split('<!-- S -->').length - 1, 1);
+    rm(dir);
+}
+
 // ─── aiu.buildTooltip (pure formatter — no vscode runtime needed) ───────────
 
 function testBuildTooltip() {
@@ -510,6 +619,12 @@ const tests = [
     testComputeStatusDetectsOrphan,
     testComputeStatusRespectsCustomGlobs,
     testFormatStatusBar,
+    testBuildAiuInjectionBlockUninitialized,
+    testBuildAiuInjectionBlockClean,
+    testBuildAiuInjectionBlockWithFiles,
+    testBuildAiuInjectionBlockHasAgentRules,
+    testInjectMarkedBlockIdempotent,
+    testInjectMarkedBlockUpdatesInPlace,
     testBuildTooltip,
 ];
 

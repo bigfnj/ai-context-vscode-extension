@@ -6,6 +6,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const u = require('./understanding');
+const inject = require('./inject');
 
 let statusBar = null;
 let lastStatus = null;
@@ -56,7 +57,41 @@ function refreshStatus() {
             statusBar.hide();
         }
     }
+
+    // Keep CLAUDE.md / AGENTS.md AIU block in sync. Failures here must not
+    // break the status bar or commands — log and move on.
+    try {
+        if (lastStatus && lastStatus.initialized) {
+            syncAiuInjection(root, lastStatus);
+        } else {
+            clearAiuInjection(root);
+        }
+    } catch (err) {
+        console.error('AIU injection sync failed:', err);
+    }
+
     return lastStatus;
+}
+
+function syncAiuInjection(root, status) {
+    const targets = inject.getInjectionTargets(root);
+    if (!targets || targets.length === 0) return;
+    const block = u.buildAiuInjectionBlock(status);
+    for (const target of targets) {
+        // Only write to target files that already exist. The AI_CTX injector
+        // is responsible for first-time CLAUDE.md / AGENTS.md creation; we
+        // piggy-back on whatever surface the user has already opted into.
+        if (!fs.existsSync(target)) continue;
+        inject.injectMarkedBlock(target, block, inject.AIU_INJECT_START, inject.AIU_INJECT_END);
+    }
+}
+
+function clearAiuInjection(root) {
+    const targets = inject.getInjectionTargets(root);
+    if (!targets || targets.length === 0) return;
+    for (const target of targets) {
+        inject.clearMarkedBlock(target, inject.AIU_INJECT_START, inject.AIU_INJECT_END);
+    }
 }
 
 function scheduleRefresh() {
