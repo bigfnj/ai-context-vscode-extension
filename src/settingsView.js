@@ -113,6 +113,8 @@ class SettingsViewProvider {
             try { status = understanding.computeStatus(root); } catch { /* ignore */ }
             return {
                 workspaceOpen: true,
+                workspaceName: require('path').basename(root),
+                workspaceRoot: root,
                 isGitRepo:     hookInstaller.isGitRepo(root),
                 hookInstalled: hookInstaller.isHookInstalled(root),
                 initialized:   !!(status && status.initialized),
@@ -519,6 +521,7 @@ function render() {
         ? '<div class="perm-empty">Open a workspace folder to use AI Understanding.</div>'
         : (() => {
             const lines = [];
+            lines.push(\`<div class="info-row"><span class="info-k">Workspace</span><span class="info-v" title="\${esc(aiu.workspaceRoot)}">\${esc(aiu.workspaceName)}</span></div>\`);
             const summaryClass = !aiu.initialized
                 ? 'health-warn'
                 : (aiu.stale + aiu.untracked + aiu.orphan === 0 ? 'health-ok' : 'health-warn');

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/settingsView.js",
-  "sha1": "a144d35266d78602d08765bf6ad858080d79ac10",
+  "sha1": "3615aed6a0036040ab75bab975be172df93a56ce",
   "purpose": "Sidebar webview provider for the AI Context Runner panel. Renders sections (Active Context, Projects, Templates, AI Understanding, Codex Settings, Behaviour, Permissions, About), pushes state into the webview via postMessage, and dispatches button events back to extension commands.",
   "exports": [
     "SettingsViewProvider"
