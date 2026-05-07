@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const u = require('./understanding');
 const inject = require('./inject');
+const hook = require('./hook');
 
 let statusBar = null;
 let lastStatus = null;
@@ -178,6 +179,50 @@ function cmdRefresh() {
     refreshStatus();
 }
 
+function hookSourcePath() {
+    return path.join(__dirname, '..', 'cli', 'aiu-precommit.js');
+}
+
+async function cmdInstallHook() {
+    const root = getWorkspaceRoot();
+    if (!root) {
+        vscode.window.showErrorMessage('AI Understanding: no workspace folder is open.');
+        return;
+    }
+    if (!hook.isGitRepo(root)) {
+        vscode.window.showErrorMessage('AI Understanding: workspace is not a git repository.');
+        return;
+    }
+    try {
+        const result = hook.installHook(root, hookSourcePath());
+        const msg = result === 'reinstalled'
+            ? 'AI Understanding pre-commit hook reinstalled.'
+            : 'AI Understanding pre-commit hook installed. Override single commits with `git commit --no-verify`.';
+        vscode.window.showInformationMessage(msg);
+    } catch (err) {
+        vscode.window.showErrorMessage(`AI Understanding: hook install failed: ${err.message}`);
+    }
+}
+
+async function cmdUninstallHook() {
+    const root = getWorkspaceRoot();
+    if (!root) {
+        vscode.window.showErrorMessage('AI Understanding: no workspace folder is open.');
+        return;
+    }
+    try {
+        const result = hook.uninstallHook(root);
+        const msg = {
+            'restored-backup': 'AI Understanding hook removed. Previous pre-commit hook restored from backup.',
+            'uninstalled':     'AI Understanding pre-commit hook removed.',
+            'noop':            'AI Understanding pre-commit hook is not installed.',
+        }[result];
+        vscode.window.showInformationMessage(msg);
+    } catch (err) {
+        vscode.window.showErrorMessage(`AI Understanding: hook uninstall failed: ${err.message}`);
+    }
+}
+
 function activate(context) {
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 9);
     statusBar.command = 'ai.aiuStatus';
@@ -187,6 +232,8 @@ function activate(context) {
         vscode.commands.registerCommand('ai.aiuInit', cmdInit),
         vscode.commands.registerCommand('ai.aiuStatus', cmdStatus),
         vscode.commands.registerCommand('ai.aiuRefresh', cmdRefresh),
+        vscode.commands.registerCommand('ai.aiuInstallHook', cmdInstallHook),
+        vscode.commands.registerCommand('ai.aiuUninstallHook', cmdUninstallHook),
     );
 
     watcher = vscode.workspace.createFileSystemWatcher('**/*');

@@ -1,10 +1,12 @@
 const assert = require('assert');
+const { execFileSync, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const u = require('../src/understanding');
+const hook = require('../src/hook');
 
 function tmpDir() {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'aiu-test-'));
@@ -551,6 +553,188 @@ function testInjectMarkedBlockUpdatesInPlace() {
     rm(dir);
 }
 
+// ─── hook installer ─────────────────────────────────────────────────────────
+
+const HOOK_SOURCE = path.resolve(__dirname, '..', 'cli', 'aiu-precommit.js');
+
+function tmpGitRepo() {
+    const dir = tmpDir();
+    execFileSync('git', ['init', '-q', dir], { stdio: 'ignore' });
+    execFileSync('git', ['-C', dir, 'config', 'user.email', 'aiu-test@example.com']);
+    execFileSync('git', ['-C', dir, 'config', 'user.name', 'aiu-test']);
+    execFileSync('git', ['-C', dir, 'config', 'commit.gpgsign', 'false']);
+    return dir;
+}
+
+function testHookInstallerInstall() {
+    const root = tmpGitRepo();
+    assert.strictEqual(hook.isHookInstalled(root), false);
+    const result = hook.installHook(root, HOOK_SOURCE);
+    assert.strictEqual(result, 'installed');
+    assert.strictEqual(hook.isHookInstalled(root), true);
+    assert.ok(fs.existsSync(hook.hookPath(root)));
+    assert.ok(fs.existsSync(hook.driverPath(root)));
+    const body = fs.readFileSync(hook.hookPath(root), 'utf8');
+    assert.ok(body.includes(hook.HOOK_MARKER));
+    assert.ok(body.includes('exec node'));
+    rm(root);
+}
+
+function testHookInstallerReinstallIsIdempotent() {
+    const root = tmpGitRepo();
+    hook.installHook(root, HOOK_SOURCE);
+    const second = hook.installHook(root, HOOK_SOURCE);
+    assert.strictEqual(second, 'reinstalled');
+    rm(root);
+}
+
+function testHookInstallerBacksUpExistingHook() {
+    const root = tmpGitRepo();
+    fs.writeFileSync(hook.hookPath(root), '#!/bin/sh\necho user hook\n', { mode: 0o755 });
+    const result = hook.installHook(root, HOOK_SOURCE);
+    assert.strictEqual(result, 'installed');
+    assert.ok(fs.existsSync(hook.backupPath(root)));
+    assert.ok(fs.readFileSync(hook.backupPath(root), 'utf8').includes('user hook'));
+    rm(root);
+}
+
+function testHookInstallerUninstallRestoresBackup() {
+    const root = tmpGitRepo();
+    fs.writeFileSync(hook.hookPath(root), '#!/bin/sh\necho user hook\n', { mode: 0o755 });
+    hook.installHook(root, HOOK_SOURCE);
+    const r = hook.uninstallHook(root);
+    assert.strictEqual(r, 'restored-backup');
+    assert.strictEqual(hook.isHookInstalled(root), false);
+    assert.ok(fs.readFileSync(hook.hookPath(root), 'utf8').includes('user hook'));
+    rm(root);
+}
+
+function testHookInstallerUninstallNoBackup() {
+    const root = tmpGitRepo();
+    hook.installHook(root, HOOK_SOURCE);
+    const r = hook.uninstallHook(root);
+    assert.strictEqual(r, 'uninstalled');
+    assert.strictEqual(fs.existsSync(hook.hookPath(root)), false);
+    assert.strictEqual(fs.existsSync(hook.driverPath(root)), false);
+    rm(root);
+}
+
+function testHookInstallerUninstallNoop() {
+    const root = tmpGitRepo();
+    const r = hook.uninstallHook(root);
+    assert.strictEqual(r, 'noop');
+    rm(root);
+}
+
+function testHookInstallerRejectsNonGit() {
+    const root = tmpDir();
+    assert.throws(() => hook.installHook(root, HOOK_SOURCE), /Not a git repository/);
+    rm(root);
+}
+
+// ─── hook integration: actually run the hook against a real git repo ────────
+
+function gitC(root, args, opts) {
+    return execFileSync('git', ['-C', root, ...args], opts || {});
+}
+
+function testHookIntegrationNoMetaIsNoop() {
+    const root = tmpGitRepo();
+    fs.writeFileSync(path.join(root, 'README.md'), '# repo\n');
+    gitC(root, ['add', 'README.md']);
+    const result = spawnSync('node', [HOOK_SOURCE], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 0,
+        `expected exit 0 for repo without _meta.json, got ${result.status}: ${result.stderr}`);
+    rm(root);
+}
+
+function testHookIntegrationCleanCommitPasses() {
+    const root = tmpGitRepo();
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log(1);\n');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'fx', version: '0.1.0'}));
+    u.generateSkeleton(root);
+    gitC(root, ['add', '-A']);
+    const result = spawnSync('node', [HOOK_SOURCE], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 0,
+        `clean commit should pass; got ${result.status}: ${result.stderr}`);
+    rm(root);
+}
+
+function testHookIntegrationBlocksMissingSidecar() {
+    const root = tmpGitRepo();
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log(1);\n');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'fx'}));
+    u.generateSkeleton(root);
+    gitC(root, ['add', '-A']);
+    gitC(root, ['commit', '-m', 'init', '-q']);
+    // Add a new source file but DON'T create its sidecar.
+    fs.writeFileSync(path.join(root, 'src', 'b.js'), 'console.log(2);\n');
+    gitC(root, ['add', 'src/b.js']);
+    const result = spawnSync('node', [HOOK_SOURCE], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 1, 'missing sidecar should block');
+    assert.ok(result.stderr.includes('missing sidecar'),
+        `expected "missing sidecar" in stderr; got: ${result.stderr}`);
+    rm(root);
+}
+
+function testHookIntegrationBlocksStaleSidecar() {
+    const root = tmpGitRepo();
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log(1);\n');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'fx'}));
+    u.generateSkeleton(root);
+    gitC(root, ['add', '-A']);
+    gitC(root, ['commit', '-m', 'init', '-q']);
+    // Modify source but don't refresh sha1 in sidecar.
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log("changed");\n');
+    gitC(root, ['add', 'src/a.js']);
+    const result = spawnSync('node', [HOOK_SOURCE], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 1, 'stale sidecar should block');
+    assert.ok(result.stderr.includes('sha1'),
+        `expected sha1 in stderr; got: ${result.stderr}`);
+    rm(root);
+}
+
+function testHookIntegrationOrphanSidecarDeletion() {
+    const root = tmpGitRepo();
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log(1);\n');
+    fs.writeFileSync(path.join(root, 'src', 'b.js'), 'console.log(2);\n');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'fx'}));
+    u.generateSkeleton(root);
+    gitC(root, ['add', '-A']);
+    gitC(root, ['commit', '-m', 'init', '-q']);
+    // Remove the sidecar but leave the source file alone.
+    fs.unlinkSync(path.join(root, 'AI_UNDERSTANDING', 'src', 'b.js.aiu.json'));
+    gitC(root, ['add', '-A']);
+    const result = spawnSync('node', [HOOK_SOURCE], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 1, 'orphan sidecar deletion should block');
+    assert.ok(result.stderr.includes('staged for deletion'),
+        `expected orphan message; got: ${result.stderr}`);
+    rm(root);
+}
+
+function testHookIntegrationPairedDeletionPasses() {
+    const root = tmpGitRepo();
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'a.js'), 'console.log(1);\n');
+    fs.writeFileSync(path.join(root, 'src', 'b.js'), 'console.log(2);\n');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({name: 'fx'}));
+    u.generateSkeleton(root);
+    gitC(root, ['add', '-A']);
+    gitC(root, ['commit', '-m', 'init', '-q']);
+    // Delete both sides — should pass.
+    fs.unlinkSync(path.join(root, 'src', 'b.js'));
+    fs.unlinkSync(path.join(root, 'AI_UNDERSTANDING', 'src', 'b.js.aiu.json'));
+    gitC(root, ['add', '-A']);
+    const result = spawnSync('node', [HOOK_SOURCE], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 0,
+        `paired deletion should pass; got ${result.status}: ${result.stderr}`);
+    rm(root);
+}
+
 // ─── aiu.buildTooltip (pure formatter — no vscode runtime needed) ───────────
 
 function testBuildTooltip() {
@@ -625,6 +809,19 @@ const tests = [
     testBuildAiuInjectionBlockHasAgentRules,
     testInjectMarkedBlockIdempotent,
     testInjectMarkedBlockUpdatesInPlace,
+    testHookInstallerInstall,
+    testHookInstallerReinstallIsIdempotent,
+    testHookInstallerBacksUpExistingHook,
+    testHookInstallerUninstallRestoresBackup,
+    testHookInstallerUninstallNoBackup,
+    testHookInstallerUninstallNoop,
+    testHookInstallerRejectsNonGit,
+    testHookIntegrationNoMetaIsNoop,
+    testHookIntegrationCleanCommitPasses,
+    testHookIntegrationBlocksMissingSidecar,
+    testHookIntegrationBlocksStaleSidecar,
+    testHookIntegrationOrphanSidecarDeletion,
+    testHookIntegrationPairedDeletionPasses,
     testBuildTooltip,
 ];
 

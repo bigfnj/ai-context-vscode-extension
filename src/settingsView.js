@@ -2,6 +2,8 @@ const vscode = require('vscode');
 const { listContexts, loadContext, saveContext, getCtxDir, getProjectsRoot, checkContextHealth, listTemplates } = require('./context');
 const { getAgents } = require('./inject');
 const { listRemovalCommands } = require('./permissions');
+const understanding = require('./understanding');
+const hookInstaller = require('./hook');
 
 const VERSION = require('../package.json').version;
 
@@ -100,7 +102,29 @@ class SettingsViewProvider {
             const ctx = loadContext(dir, name);
             return { name, decisions: (ctx.d||[]).length, files: (ctx.f||[]).length };
         });
-        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates });
+
+        // AI Understanding section state. Compute against the workspace root,
+        // falling back to a disabled section when no workspace is open.
+        const aiu = (() => {
+            const folders = vscode.workspace.workspaceFolders;
+            const root = folders && folders.length > 0 ? folders[0].uri.fsPath : null;
+            if (!root) return { workspaceOpen: false };
+            let status = null;
+            try { status = understanding.computeStatus(root); } catch { /* ignore */ }
+            return {
+                workspaceOpen: true,
+                isGitRepo:     hookInstaller.isGitRepo(root),
+                hookInstalled: hookInstaller.isHookInstalled(root),
+                initialized:   !!(status && status.initialized),
+                summary:       understanding.formatStatusBar(status),
+                stale:         status ? status.stale.length     : 0,
+                untracked:     status ? status.untracked.length : 0,
+                orphan:        status ? status.orphan.length    : 0,
+                fresh:         status ? status.fresh.length     : 0,
+            };
+        })();
+
+        this._view.webview.postMessage({ type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu });
     }
 
     async _handleMessage(msg) {
@@ -266,6 +290,11 @@ class SettingsViewProvider {
                 await vscode.commands.executeCommand('ai.newContextFromTemplate');
                 break;
             }
+            case 'aiuInit':          await vscode.commands.executeCommand('ai.aiuInit');          this.refresh(); break;
+            case 'aiuStatus':        await vscode.commands.executeCommand('ai.aiuStatus');        this.refresh(); break;
+            case 'aiuRefresh':       await vscode.commands.executeCommand('ai.aiuRefresh');       this.refresh(); break;
+            case 'aiuInstallHook':   await vscode.commands.executeCommand('ai.aiuInstallHook');   this.refresh(); break;
+            case 'aiuUninstallHook': await vscode.commands.executeCommand('ai.aiuUninstallHook'); this.refresh(); break;
         }
     }
 
@@ -380,7 +409,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [] };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false } };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -409,7 +438,7 @@ function fmt(iso) {
 }
 
 function render() {
-    const { active, previous, contexts, settings, perms, version, secondaries, activeHealth, templates } = S;
+    const { active, previous, contexts, settings, perms, version, secondaries, activeHealth, templates, aiu } = S;
     const activeCtx   = contexts.find(c => c.name === active);
     const secList     = Array.isArray(secondaries) ? secondaries : [];
     const agents      = settings.agents || ['claude','codex','copilot'];
@@ -486,6 +515,39 @@ function render() {
         </div>
     \` : '';
 
+    const aiuBody = !aiu || !aiu.workspaceOpen
+        ? '<div class="perm-empty">Open a workspace folder to use AI Understanding.</div>'
+        : (() => {
+            const lines = [];
+            const summaryClass = !aiu.initialized
+                ? 'health-warn'
+                : (aiu.stale + aiu.untracked + aiu.orphan === 0 ? 'health-ok' : 'health-warn');
+            lines.push(\`<div class="info-row"><span class="info-k">Status</span><span class="info-v \${summaryClass}">\${esc(aiu.summary)}</span></div>\`);
+            if (aiu.initialized) {
+                lines.push(\`<div class="info-row"><span class="info-k">Fresh</span><span class="info-v">\${aiu.fresh}</span></div>\`);
+                if (aiu.stale)     lines.push(\`<div class="info-row"><span class="info-k">Stale</span><span class="info-v health-warn">\${aiu.stale}</span></div>\`);
+                if (aiu.untracked) lines.push(\`<div class="info-row"><span class="info-k">Untracked</span><span class="info-v health-warn">\${aiu.untracked}</span></div>\`);
+                if (aiu.orphan)    lines.push(\`<div class="info-row"><span class="info-k">Orphan</span><span class="info-v health-warn">\${aiu.orphan}</span></div>\`);
+            }
+            const hookRow = aiu.isGitRepo
+                ? \`<div class="info-row"><span class="info-k">Pre-commit hook</span><span class="info-v">\${aiu.hookInstalled ? '✓ installed' : '○ not installed'}</span></div>\`
+                : '<div class="info-row"><span class="info-k">Pre-commit hook</span><span class="info-v">— not a git repo</span></div>';
+            lines.push(hookRow);
+            const buttons = [];
+            if (!aiu.initialized) {
+                buttons.push('<button class="sec full" onclick="send(\\'aiuInit\\')">Initialize AI_UNDERSTANDING/</button>');
+            } else {
+                buttons.push('<button class="sec full" onclick="send(\\'aiuStatus\\')">Show Status / Open Files</button>');
+                buttons.push('<button class="sec full" onclick="send(\\'aiuRefresh\\')">Refresh</button>');
+            }
+            if (aiu.isGitRepo) {
+                buttons.push(aiu.hookInstalled
+                    ? '<button class="sec full" onclick="send(\\'aiuUninstallHook\\')">Uninstall Pre-commit Hook</button>'
+                    : '<button class="sec full" onclick="send(\\'aiuInstallHook\\')">Install Pre-commit Hook</button>');
+            }
+            return lines.join('') + buttons.join('');
+        })();
+
     document.getElementById('root').innerHTML =
         section('active', 'Active Context', true,
             (active && activeCtx)
@@ -524,6 +586,7 @@ function render() {
             ) +
             \`<button class="sec full" onclick="send('newFromTemplate')">+ New from Template</button>\`
         ) +
+        section('aiu', 'AI Understanding', false, aiuBody) +
         section('codex', 'Codex Settings', true, codexBody) +
         section('behaviour', 'Behaviour', true,
             TOGGLES.map(t => \`

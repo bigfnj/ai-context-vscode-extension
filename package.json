@@ -125,6 +125,14 @@
       {
         "command": "ai.aiuRefresh",
         "title": "AI Understanding: Refresh"
+      },
+      {
+        "command": "ai.aiuInstallHook",
+        "title": "AI Understanding: Install Pre-Commit Hook"
+      },
+      {
+        "command": "ai.aiuUninstallHook",
+        "title": "AI Understanding: Uninstall Pre-Commit Hook"
       }
     ],
     "keybindings": [
