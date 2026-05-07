@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/understanding.js",
-  "sha1": "ae7108e2b8108fa74179a8279ad6ba1a61e49ee2",
+  "sha1": "0bce636735d5df495280fdaa8b19e53b5730ed47",
   "purpose": "Pure-Node implementation of the AI_UNDERSTANDING schema-v1 contract from AI_UNDERSTANDING_FORMAT.md. Provides sha1, glob matching, validators (entry / meta / operation), per-file CRUD, status (fresh/stale/untracked/orphan) computation, and skeleton bootstrap. No vscode dependency — fully unit-testable.",
   "exports": [
     "SCHEMA_VERSION",

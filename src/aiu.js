@@ -11,12 +11,33 @@ const hook = require('./hook');
 
 let statusBar = null;
 let lastStatus = null;
+let lastRoot = null;
+let lastProject = null;
 let refreshTimer = null;
 let watcher = null;
+let opts = {};
 
-function getWorkspaceRoot() {
+// Resolve the project root AIU operates on. Order:
+//   1. opts.getActiveContextRoot()  — the active AI Context's root path.
+//      This makes AIU project-specific instead of workspace-wholistic.
+//   2. The first workspace folder, as a fallback.
+//   3. null — disables the section.
+function getProjectRoot() {
+    if (typeof opts.getActiveContextRoot === 'function') {
+        const root = opts.getActiveContextRoot();
+        if (root) return root;
+    }
     const folders = vscode.workspace.workspaceFolders;
     return folders && folders.length > 0 ? folders[0].uri.fsPath : null;
+}
+
+function getProjectName() {
+    if (typeof opts.getActiveContextName === 'function') {
+        const name = opts.getActiveContextName();
+        if (name) return name;
+    }
+    const root = getProjectRoot();
+    return root ? path.basename(root) : null;
 }
 
 function readExtensionVersion() {
@@ -26,11 +47,12 @@ function readExtensionVersion() {
     } catch { return null; }
 }
 
-function buildTooltip(status) {
-    if (!status) return 'AI Understanding';
-    if (!status.initialized) return 'AI Understanding: not initialized — click to bootstrap';
-    if (u.isClean(status)) return `AI Understanding: clean (${status.fresh.length} entries fresh)`;
-    const lines = ['AI Understanding:'];
+function buildTooltip(status, project) {
+    const head = 'AI Understanding' + (project ? ` — ${project}` : '');
+    if (!status) return head;
+    if (!status.initialized) return `${head}: not initialized — click to bootstrap`;
+    if (u.isClean(status)) return `${head}: clean (${status.fresh.length} entries fresh)`;
+    const lines = [`${head}:`];
     const cap = (arr) => arr.slice(0, 5).join(', ') + (arr.length > 5 ? '…' : '');
     if (status.stale.length)     lines.push(`  stale (${status.stale.length}): ${cap(status.stale)}`);
     if (status.untracked.length) lines.push(`  untracked (${status.untracked.length}): ${cap(status.untracked)}`);
@@ -40,7 +62,11 @@ function buildTooltip(status) {
 }
 
 function refreshStatus() {
-    const root = getWorkspaceRoot();
+    const root = getProjectRoot();
+    const project = getProjectName();
+    lastRoot = root;
+    lastProject = project;
+
     if (!root) {
         lastStatus = null;
         if (statusBar) statusBar.hide();
@@ -52,7 +78,7 @@ function refreshStatus() {
     if (statusBar) {
         if (lastStatus) {
             statusBar.text = `$(book) ${u.formatStatusBar(lastStatus)}`;
-            statusBar.tooltip = buildTooltip(lastStatus);
+            statusBar.tooltip = buildTooltip(lastStatus, project);
             statusBar.show();
         } else {
             statusBar.hide();
@@ -63,7 +89,7 @@ function refreshStatus() {
     // break the status bar or commands — log and move on.
     try {
         if (lastStatus && lastStatus.initialized) {
-            syncAiuInjection(root, lastStatus);
+            syncAiuInjection(root, lastStatus, project);
         } else {
             clearAiuInjection(root);
         }
@@ -74,10 +100,10 @@ function refreshStatus() {
     return lastStatus;
 }
 
-function syncAiuInjection(root, status) {
+function syncAiuInjection(root, status, project) {
     const targets = inject.getInjectionTargets(root);
     if (!targets || targets.length === 0) return;
-    const block = u.buildAiuInjectionBlock(status);
+    const block = u.buildAiuInjectionBlock(status, { project, root });
     for (const target of targets) {
         // Only write to target files that already exist. The AI_CTX injector
         // is responsible for first-time CLAUDE.md / AGENTS.md creation; we
@@ -101,7 +127,7 @@ function scheduleRefresh() {
 }
 
 async function cmdInit() {
-    const root = getWorkspaceRoot();
+    const root = getProjectRoot();
     if (!root) {
         vscode.window.showErrorMessage('AI Understanding: no workspace folder is open.');
         return;
@@ -131,7 +157,7 @@ async function cmdInit() {
 }
 
 async function cmdStatus() {
-    const root = getWorkspaceRoot();
+    const root = getProjectRoot();
     if (!root) {
         vscode.window.showErrorMessage('AI Understanding: no workspace folder is open.');
         return;
@@ -184,7 +210,7 @@ function hookSourcePath() {
 }
 
 async function cmdInstallHook() {
-    const root = getWorkspaceRoot();
+    const root = getProjectRoot();
     if (!root) {
         vscode.window.showErrorMessage('AI Understanding: no workspace folder is open.');
         return;
@@ -205,7 +231,7 @@ async function cmdInstallHook() {
 }
 
 async function cmdUninstallHook() {
-    const root = getWorkspaceRoot();
+    const root = getProjectRoot();
     if (!root) {
         vscode.window.showErrorMessage('AI Understanding: no workspace folder is open.');
         return;
@@ -223,7 +249,9 @@ async function cmdUninstallHook() {
     }
 }
 
-function activate(context) {
+function activate(context, options) {
+    opts = options || {};
+
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 9);
     statusBar.command = 'ai.aiuStatus';
     context.subscriptions.push(statusBar);
@@ -267,7 +295,8 @@ module.exports = {
     buildTooltip,
     // test helpers
     _internals: {
-        getWorkspaceRoot,
+        getProjectRoot,
+        getProjectName,
         readExtensionVersion,
     },
 };

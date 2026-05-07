@@ -105,16 +105,32 @@ class SettingsViewProvider {
 
         // AI Understanding section state. Compute against the workspace root,
         // falling back to a disabled section when no workspace is open.
+        // AI Understanding state — scoped to the ACTIVE CONTEXT's root, not
+        // the workspace folder. This matches the rest of the runner's
+        // project-specific behavior. Falls back to the workspace folder
+        // only when no context is active and a folder is open.
         const aiu = (() => {
-            const folders = vscode.workspace.workspaceFolders;
-            const root = folders && folders.length > 0 ? folders[0].uri.fsPath : null;
+            let project = null;
+            let root = null;
+            if (active) {
+                const ctx = loadContext(dir, active);
+                if (ctx && ctx.root) { root = ctx.root; project = active; }
+            }
+            if (!root) {
+                const folders = vscode.workspace.workspaceFolders;
+                if (folders && folders.length > 0) {
+                    root = folders[0].uri.fsPath;
+                    project = require('path').basename(root) + ' (workspace)';
+                }
+            }
             if (!root) return { workspaceOpen: false };
             let status = null;
             try { status = understanding.computeStatus(root); } catch { /* ignore */ }
             return {
                 workspaceOpen: true,
-                workspaceName: require('path').basename(root),
-                workspaceRoot: root,
+                project,
+                root,
+                noActiveContext: !active,
                 isGitRepo:     hookInstaller.isGitRepo(root),
                 hookInstalled: hookInstaller.isHookInstalled(root),
                 initialized:   !!(status && status.initialized),
@@ -518,10 +534,13 @@ function render() {
     \` : '';
 
     const aiuBody = !aiu || !aiu.workspaceOpen
-        ? '<div class="perm-empty">Open a workspace folder to use AI Understanding.</div>'
+        ? '<div class="perm-empty">Open a workspace folder or set an active context to use AI Understanding.</div>'
         : (() => {
             const lines = [];
-            lines.push(\`<div class="info-row"><span class="info-k">Workspace</span><span class="info-v" title="\${esc(aiu.workspaceRoot)}">\${esc(aiu.workspaceName)}</span></div>\`);
+            lines.push(\`<div class="info-row"><span class="info-k">Project</span><span class="info-v" title="\${esc(aiu.root)}">\${esc(aiu.project)}</span></div>\`);
+            if (aiu.noActiveContext) {
+                lines.push('<div class="perm-empty" style="font-size:0.85em;margin:4px 0">No active context — using workspace folder. Set an active context for project-specific AIU.</div>');
+            }
             const summaryClass = !aiu.initialized
                 ? 'health-warn'
                 : (aiu.stale + aiu.untracked + aiu.orphan === 0 ? 'health-ok' : 'health-warn');

@@ -584,15 +584,25 @@ function formatStatusBar(status) {
 // CLAUDE.md / AGENTS.md. Pure — no I/O. Caller decides where to write it.
 //
 // The block is a session-time signal to the AI agent: which entries are
-// stale/untracked/orphan, plus the rules for how to act on them.
-function buildAiuInjectionBlock(status) {
+// stale/untracked/orphan, plus the rules for how to act on them. Optional
+// `opts.project` and `opts.root` scope the block to a specific AI context
+// project so the agent knows which root the AI_UNDERSTANDING/ tree belongs
+// to (matches the AI_CONTEXT block's `p` field above it in the file).
+function buildAiuInjectionBlock(status, opts) {
     const s = status || { initialized: false, stale: [], untracked: [], orphan: [] };
+    const project = opts && opts.project ? opts.project : null;
+    const root    = opts && opts.root    ? opts.root    : null;
     const lines = [];
+
+    if (project) lines.push(`AIU_PROJECT=${JSON.stringify(project)}`);
+    if (root)    lines.push(`AIU_ROOT=${JSON.stringify(root)}`);
 
     if (!s.initialized) {
         lines.push('AIU_STATUS=not_initialized');
+        lines.push('');
+        const where = root ? `at ${root}/AI_UNDERSTANDING/` : 'for this project';
         lines.push(
-            'AI_UNDERSTANDING/ does not exist for this project. Run the ' +
+            `AI_UNDERSTANDING/ does not exist ${where}. Run the ` +
             '"AI Understanding: Initialize" command (or call ' +
             'understanding.generateSkeleton) to bootstrap before populating ' +
             'per-file entries. Spec: AI_UNDERSTANDING_FORMAT.md.'
@@ -605,7 +615,17 @@ function buildAiuInjectionBlock(status) {
     lines.push(`AIU_ORPHAN=${JSON.stringify(s.orphan || [])}`);
     lines.push('');
     lines.push(
-        'AI_UNDERSTANDING/ is the per-project codebase model — schema-v1, see ' +
+        'After ingesting the AI_CONTEXT block above, also ingest this ' +
+        'AI Understanding block. The two are paired: AI_CONTEXT carries ' +
+        'session state for the project; AI_UNDERSTANDING carries the ' +
+        'codebase model. Match them by project — both belong to ' +
+        (project ? `"${project}"` : 'the active project') +
+        (root ? ` at ${root}.` : '.')
+    );
+    lines.push('');
+    const treeLocation = root ? `${root}/AI_UNDERSTANDING/` : 'AI_UNDERSTANDING/';
+    lines.push(
+        `${treeLocation} is the per-project codebase model — schema-v1, see ` +
         'AI_UNDERSTANDING_FORMAT.md. Rules for this session:'
     );
     lines.push(

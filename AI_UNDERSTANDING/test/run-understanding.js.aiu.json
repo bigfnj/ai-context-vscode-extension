@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "test/run-understanding.js",
-  "sha1": "25e5ad2ecb9c9a673e2f21250e240e3420a3014c",
+  "sha1": "d3a2cdf17f5cec711e717efccdad32b682fedeff",
   "purpose": "Test suite for the AI Understanding subsystem. Covers sha1, glob matching, validators, CRUD, skeleton generation, status (staleness) computation, AIU injection block formatter, idempotent injectMarkedBlock, hook installer, and end-to-end pre-commit hook integration against real tmp git repos.",
   "exports": [],
   "imports": [

@@ -495,6 +495,30 @@ function testBuildAiuInjectionBlockHasAgentRules() {
     assert.ok(text.toLowerCase().includes('last_audit_commit')); // §8.3
 }
 
+function testBuildAiuInjectionBlockProjectScoped() {
+    const text = u.buildAiuInjectionBlock(
+        { initialized: true, fresh: ['src/a.js'], stale: [], untracked: [], orphan: [] },
+        { project: 'my-app', root: '/home/dev/projects/my-app' }
+    );
+    assert.ok(text.includes('AIU_PROJECT="my-app"'));
+    assert.ok(text.includes('AIU_ROOT="/home/dev/projects/my-app"'));
+    assert.ok(text.includes('/home/dev/projects/my-app/AI_UNDERSTANDING/'));
+    // The instruction telling the agent to ingest AIU paired with AI_CONTEXT.
+    assert.ok(text.toLowerCase().includes('after ingesting the ai_context'));
+    assert.ok(text.includes('"my-app"'));
+}
+
+function testBuildAiuInjectionBlockUninitializedScoped() {
+    const text = u.buildAiuInjectionBlock(
+        { initialized: false },
+        { project: 'my-app', root: '/x/y' }
+    );
+    assert.ok(text.includes('AIU_PROJECT="my-app"'));
+    assert.ok(text.includes('AIU_ROOT="/x/y"'));
+    assert.ok(text.includes('AIU_STATUS=not_initialized'));
+    assert.ok(text.includes('/x/y/AI_UNDERSTANDING/'));
+}
+
 // ─── inject.injectMarkedBlock idempotence ───────────────────────────────────
 
 function testInjectMarkedBlockIdempotent() {
@@ -807,6 +831,8 @@ const tests = [
     testBuildAiuInjectionBlockClean,
     testBuildAiuInjectionBlockWithFiles,
     testBuildAiuInjectionBlockHasAgentRules,
+    testBuildAiuInjectionBlockProjectScoped,
+    testBuildAiuInjectionBlockUninitializedScoped,
     testInjectMarkedBlockIdempotent,
     testInjectMarkedBlockUpdatesInPlace,
     testHookInstallerInstall,

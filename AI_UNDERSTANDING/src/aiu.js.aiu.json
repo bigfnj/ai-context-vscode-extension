@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/aiu.js",
-  "sha1": "8f4cf09119b0d6e2a24dba1fbc67d2109421be28",
+  "sha1": "bcf548ac2de008c337b4ee649cafa99ac366a344",
   "purpose": "VS Code adapter for the AI Understanding subsystem. Registers five commands (aiuInit, aiuStatus, aiuRefresh, aiuInstallHook, aiuUninstallHook), owns a left-aligned status bar item, and keeps the AIU block in CLAUDE.md / AGENTS.md in sync via a debounced workspace watcher.",
   "exports": [
     "activate",

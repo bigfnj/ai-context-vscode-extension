@@ -410,8 +410,22 @@ function activate(context) {
 
     // AI Understanding (commands + status bar). Self-contained module —
     // failures here must not break the rest of the extension.
-    try { aiu.activate(context); }
-    catch (err) { console.error('AI Understanding activation failed:', err); }
+    // Callbacks make AIU project-specific: it reads the active context's
+    // `root` rather than the workspace folder, so opening the home dir as
+    // a workspace and switching between contexts gives per-project AIU state.
+    try {
+        aiu.activate(context, {
+            getActiveContextRoot: () => {
+                const name = wsState.get(ACTIVE_KEY);
+                if (!name) return null;
+                try {
+                    const ctx = loadContext(getCtxDir(), name);
+                    return ctx && ctx.root ? ctx.root : null;
+                } catch { return null; }
+            },
+            getActiveContextName: () => wsState.get(ACTIVE_KEY) || null,
+        });
+    } catch (err) { console.error('AI Understanding activation failed:', err); }
 
     // ── Sweep: consume any orphan *.json.update sidecars left by previous sessions.
     // The file watcher only fires for events that occur while the extension is
@@ -537,6 +551,9 @@ function activate(context) {
                 if (outgoing) await doAutoPromote(trackedWsState, outgoing, value);
                 updateStatusBar();
                 settingsView.refresh();
+                // Active context changed — AIU now points at a different
+                // root, so refresh its status bar + injected block too.
+                try { aiu.refreshStatus(); } catch { /* ignore */ }
             }
         },
     };
