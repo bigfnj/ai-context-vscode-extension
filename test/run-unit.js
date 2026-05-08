@@ -589,6 +589,108 @@ function testTemplates() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+function testApplyCodexSandboxMode() {
+    const root = tmpDir();
+    const cfg = path.join(root, '.codex', 'config.toml');
+
+    // Off when no config exists yet → returns ok and writes nothing
+    const r0 = permissions.applyCodexSandboxMode(root, null);
+    assert.strictEqual(r0.ok, true, 'mode=null on missing config returns ok');
+    assert.strictEqual(fs.existsSync(cfg), false, 'no config created when mode=null');
+
+    // workspace-write writes the line
+    const r1 = permissions.applyCodexSandboxMode(root, 'workspace-write');
+    assert.strictEqual(r1.ok, true, 'workspace-write succeeds');
+    assert.ok(fs.readFileSync(cfg, 'utf-8').includes('sandbox_mode = "workspace-write"'), 'workspace-write line present');
+
+    // Switch to danger-full-access overwrites the line (no duplicate)
+    const r2 = permissions.applyCodexSandboxMode(root, 'danger-full-access');
+    assert.strictEqual(r2.ok, true, 'danger-full-access succeeds');
+    const content2 = fs.readFileSync(cfg, 'utf-8');
+    assert.ok(content2.includes('sandbox_mode = "danger-full-access"'), 'danger-full-access line present');
+    assert.ok(!content2.includes('sandbox_mode = "workspace-write"'), 'old workspace-write line replaced');
+    assert.strictEqual(content2.split('sandbox_mode').length - 1, 1, 'exactly one sandbox_mode line');
+
+    // null removes the line
+    const r3 = permissions.applyCodexSandboxMode(root, null);
+    assert.strictEqual(r3.ok, true, 'null removes the line');
+    assert.ok(!fs.readFileSync(cfg, 'utf-8').includes('sandbox_mode'), 'sandbox_mode removed');
+
+    // Invalid mode rejected
+    const r4 = permissions.applyCodexSandboxMode(root, 'bogus');
+    assert.strictEqual(r4.ok, false, 'invalid mode rejected');
+
+    fs.rmSync(root, { recursive: true, force: true });
+}
+
+function testApplyCodexSandboxNetworkAccess() {
+    const root = tmpDir();
+    const cfg = path.join(root, '.codex', 'config.toml');
+    fs.mkdirSync(path.dirname(cfg), { recursive: true });
+    fs.writeFileSync(cfg, 'sandbox_mode = "workspace-write"\n', 'utf-8');
+
+    // Enable: writes section
+    permissions.applyCodexSandboxNetworkAccess(root, true);
+    const c1 = fs.readFileSync(cfg, 'utf-8');
+    assert.ok(c1.includes('[sandbox_workspace_write]'), 'section present');
+    assert.ok(c1.includes('network_access = true'), 'network_access = true present');
+    assert.ok(c1.includes('sandbox_mode = "workspace-write"'), 'sandbox_mode preserved');
+
+    // Disable: removes section, leaves rest intact
+    permissions.applyCodexSandboxNetworkAccess(root, false);
+    const c2 = fs.readFileSync(cfg, 'utf-8');
+    assert.ok(!c2.includes('[sandbox_workspace_write]'), 'section removed');
+    assert.ok(!c2.includes('network_access'), 'network_access removed');
+    assert.ok(c2.includes('sandbox_mode = "workspace-write"'), 'sandbox_mode still present');
+
+    // Re-enable is idempotent (no duplicate sections)
+    permissions.applyCodexSandboxNetworkAccess(root, true);
+    permissions.applyCodexSandboxNetworkAccess(root, true);
+    const c3 = fs.readFileSync(cfg, 'utf-8');
+    assert.strictEqual(c3.split('[sandbox_workspace_write]').length - 1, 1, 'exactly one section');
+
+    fs.rmSync(root, { recursive: true, force: true });
+}
+
+function testProbeSandboxRuntime() {
+    const r = permissions.probeSandboxRuntime();
+    assert.ok(r && typeof r === 'object', 'returns object');
+    assert.ok(['macos', 'windows', 'linux', 'wsl2'].includes(r.platform), 'known platform: ' + r.platform);
+    assert.strictEqual(typeof r.ok, 'boolean', 'ok is boolean');
+    if (!r.ok) {
+        assert.ok(r.advice, 'advice provided when not ok');
+    }
+}
+
+function testContextNormalizeSandboxFields() {
+    const dir = tmpDir();
+    // Legacy boolean field is intentionally NOT migrated — fields are removed
+    // from disk in the v4.1.0 cleanup, and normalizeContext defaults the new
+    // enum to null when absent.
+    const legacy = {
+        ...context.createDefaultContext('Legacy', dir),
+        perms: { allow: [], codex: 'trusted', safeCommands: [], sandboxMode: true },
+    };
+    context.saveContext(dir, 'Legacy', legacy);
+    const loaded = context.loadContext(dir, 'Legacy');
+    assert.strictEqual(loaded.perms.codexSandboxMode, null, 'legacy boolean does not seed new enum');
+    assert.strictEqual('sandboxMode' in loaded.perms, false, 'legacy field stripped on normalize');
+
+    // Valid enum values round-trip
+    for (const mode of ['workspace-write', 'danger-full-access']) {
+        const ctx = { ...context.createDefaultContext('M', dir), perms: { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: mode, codexNetworkAccess: false } };
+        context.saveContext(dir, 'M', ctx);
+        assert.strictEqual(context.loadContext(dir, 'M').perms.codexSandboxMode, mode, `${mode} round-trips`);
+    }
+
+    // Garbage enum reverts to null
+    const bad = { ...context.createDefaultContext('B', dir), perms: { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: 'bogus', codexNetworkAccess: false } };
+    context.saveContext(dir, 'B', bad);
+    assert.strictEqual(context.loadContext(dir, 'B').perms.codexSandboxMode, null, 'invalid enum coerced to null');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 testGeneralizeClaudePerm();
 testIsClaudePermCovered();
 testCaptureNewClaudePerms();
@@ -596,5 +698,9 @@ testUpdateCodexTomlContent();
 testSearchContexts();
 testCheckContextHealth();
 testTemplates();
+testApplyCodexSandboxMode();
+testApplyCodexSandboxNetworkAccess();
+testProbeSandboxRuntime();
+testContextNormalizeSandboxFields();
 
 console.log('unit tests passed');

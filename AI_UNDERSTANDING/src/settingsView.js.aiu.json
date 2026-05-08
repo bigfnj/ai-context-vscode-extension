@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/settingsView.js",
-  "sha1": "9e510b2b53c590b9deb8de7d91649d9de87432ec",
+  "sha1": "9914c0182a323ba6e4d1ed25bfa145290d045b44",
   "purpose": "Sidebar webview provider for the AI Context Runner panel. Renders sections (Active Context, Projects, Templates, AI Understanding, Codex Settings, Behaviour, Permissions, About), pushes state into the webview via postMessage, and dispatches button events back to extension commands.",
   "exports": [
     "SettingsViewProvider"
@@ -25,7 +25,8 @@
     "context.listContexts / loadContext / saveContext / checkContextHealth / listTemplates",
     "understanding.computeStatus / formatStatusBar",
     "hook.isGitRepo / isHookInstalled",
-    "permissions.listRemovalCommands"
+    "permissions.listRemovalCommands",
+    "permissions.applyCodexSandboxMode / applyCodexSandboxNetworkAccess / probeSandboxRuntime / setCodexApprovalPolicyNever"
   ],
   "invariants": [
     "refresh() short-circuits when _view is null or not visible — webview rebuilds happen only when the user is looking.",
@@ -36,6 +37,7 @@
   "gotchas": [
     "After dispatching an aiu* command, the handler calls this.refresh() so the panel reflects the new state — without this the post-action UI would lag until the next watcher fire.",
     "JS template literals in this file are the webview source; escaping is via esc() — every interpolated string from disk MUST go through esc().",
-    "Adding a new section to the rendered HTML requires both a new section() call AND a state field in the postMessage payload — silent breakage if either is forgotten."
+    "Adding a new section to the rendered HTML requires both a new section() call AND a state field in the postMessage payload — silent breakage if either is forgotten.",
+    "The Codex section renders three separate message types — setCodexSandboxMode (radio), setCodexNetworkAccess (toggle, only meaningful in workspace-write), setCodexRecommended (one-click workspace-write + network=false). The webview's setSandboxMode() helper sends mode=null for the Off radio."
   ]
 }

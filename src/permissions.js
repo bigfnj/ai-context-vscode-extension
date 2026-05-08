@@ -658,14 +658,23 @@ function setCodexBashAlias(enabled) {
 // Returns { ok: true } on success, or { ok: false, error: string } on failure.
 // On verification failure the prior file content is restored so the toggle
 // reflects on-disk reality.
-function applyCodexSandboxMode(projectRoot, enabled) {
+// Tri-state sandbox mode for the project's .codex/config.toml.
+//   mode === 'workspace-write'    → safer default; workspace-only writes, network off
+//   mode === 'danger-full-access' → no sandbox; pair with approval_policy=never for zero friction
+//   mode === null | undefined     → remove the sandbox_mode line (Codex falls back to its built-in default)
+const VALID_SANDBOX_MODES = new Set(['workspace-write', 'danger-full-access']);
+
+function applyCodexSandboxMode(projectRoot, mode) {
     if (!projectRoot) return { ok: false, error: 'no projectRoot provided' };
+    if (mode != null && !VALID_SANDBOX_MODES.has(mode)) {
+        return { ok: false, error: `invalid sandbox mode: ${mode}` };
+    }
     const configDir  = path.join(projectRoot, '.codex');
     const configPath = path.join(configDir, 'config.toml');
     const fileExistedBefore = fs.existsSync(configPath);
 
     if (!fs.existsSync(configDir)) {
-        if (!enabled) return { ok: true };
+        if (!mode) return { ok: true };
         try {
             fs.mkdirSync(configDir, { recursive: true });
         } catch (err) {
@@ -679,8 +688,8 @@ function applyCodexSandboxMode(projectRoot, enabled) {
     const idx     = lines.findIndex(l => keyLine.test(l));
 
     let updated;
-    if (enabled) {
-        const newLine = 'sandbox_mode = "danger-full-access"';
+    if (mode) {
+        const newLine = `sandbox_mode = "${mode}"`;
         updated = idx >= 0
             ? [...lines.slice(0, idx), newLine, ...lines.slice(idx + 1)]
             : [newLine, ...lines];
@@ -697,7 +706,6 @@ function applyCodexSandboxMode(projectRoot, enabled) {
         return { ok: false, error: `cannot write config: ${err.message}` };
     }
 
-    // Verify by reading the file back and re-checking the sandbox_mode line.
     const revert = () => {
         try {
             if (!fileExistedBefore) fs.unlinkSync(configPath);
@@ -713,20 +721,121 @@ function applyCodexSandboxMode(projectRoot, enabled) {
         return { ok: false, error: `cannot read config back: ${err.message}` };
     }
 
-    const readBackHasFullAccess = readBack
-        .split('\n')
-        .some(l => keyLine.test(l) && l.includes('"danger-full-access"'));
+    const readBackMode = (() => {
+        for (const l of readBack.split('\n')) {
+            if (!keyLine.test(l)) continue;
+            const m = l.match(/=\s*"([^"]+)"/);
+            return m ? m[1] : null;
+        }
+        return null;
+    })();
 
-    if (enabled && !readBackHasFullAccess) {
+    if (mode && readBackMode !== mode) {
         revert();
-        return { ok: false, error: 'wrote config but sandbox_mode line not present after readback' };
+        return { ok: false, error: `wrote sandbox_mode but readback shows ${readBackMode || 'absent'}` };
     }
-    if (!enabled && readBackHasFullAccess) {
+    if (!mode && readBackMode !== null) {
         revert();
-        return { ok: false, error: 'sandbox_mode line still present after disable' };
+        return { ok: false, error: `sandbox_mode line still present (${readBackMode}) after disable` };
     }
 
     return { ok: true };
+}
+
+// Toggles the [sandbox_workspace_write] section's network_access flag in the
+// project's .codex/config.toml. Only meaningful when sandbox_mode is
+// "workspace-write"; for any other mode the section is harmless but unused.
+// enabled === true   → write/replace the section with network_access = true
+// enabled === false  → remove the section entirely (Codex defaults to no network)
+function applyCodexSandboxNetworkAccess(projectRoot, enabled) {
+    if (!projectRoot) return { ok: false, error: 'no projectRoot provided' };
+    const configDir  = path.join(projectRoot, '.codex');
+    const configPath = path.join(configDir, 'config.toml');
+    const fileExistedBefore = fs.existsSync(configPath);
+
+    if (!fs.existsSync(configDir)) {
+        if (!enabled) return { ok: true };
+        try {
+            fs.mkdirSync(configDir, { recursive: true });
+        } catch (err) {
+            return { ok: false, error: `cannot create .codex/: ${err.message}` };
+        }
+    }
+
+    const priorContent = fileExistedBefore ? fs.readFileSync(configPath, 'utf-8') : '';
+    const stripped = stripCodexSection(priorContent, 'sandbox_workspace_write');
+
+    const newContent = enabled
+        ? (stripped.endsWith('\n') || stripped === '' ? stripped : stripped + '\n') +
+          '[sandbox_workspace_write]\nnetwork_access = true\n'
+        : stripped;
+
+    try {
+        fs.writeFileSync(configPath, newContent, 'utf-8');
+    } catch (err) {
+        return { ok: false, error: `cannot write config: ${err.message}` };
+    }
+    return { ok: true };
+}
+
+// Removes a single named TOML section (and its entries up to the next section
+// header or EOF). Tolerant of leading whitespace; preserves all other content.
+function stripCodexSection(content, sectionName) {
+    if (!content) return '';
+    const lines = content.split('\n');
+    const headerRe = new RegExp(`^\\s*\\[${sectionName}\\]\\s*$`);
+    const out = [];
+    let inSection = false;
+    for (const line of lines) {
+        if (headerRe.test(line)) { inSection = true; continue; }
+        if (inSection) {
+            if (/^\s*\[/.test(line)) { inSection = false; out.push(line); }
+            // else: skip section body
+        } else {
+            out.push(line);
+        }
+    }
+    return out.join('\n');
+}
+
+// Detects the host platform's sandbox runtime requirement for Codex.
+// Linux/WSL2: needs `bwrap` (bubblewrap) on PATH. macOS: built-in Seatbelt.
+// Windows native: built-in PowerShell sandbox.
+//
+// Returns { platform, ok, detail, advice? } — `ok` is false only when the
+// platform requires an external binary and we can't find it.
+function probeSandboxRuntime() {
+    const platform = process.platform;
+    if (platform === 'darwin') {
+        return { platform: 'macos', ok: true, detail: 'Seatbelt (built-in)' };
+    }
+    if (platform === 'win32') {
+        return { platform: 'windows', ok: true, detail: 'PowerShell native sandbox' };
+    }
+    // Linux (incl. WSL2): need bwrap
+    const isWSL = (() => {
+        try {
+            const v = fs.readFileSync('/proc/version', 'utf-8').toLowerCase();
+            return v.includes('microsoft') || v.includes('wsl');
+        } catch { return false; }
+    })();
+    const label = isWSL ? 'wsl2' : 'linux';
+    const pathDirs = (process.env.PATH || '').split(path.delimiter);
+    for (const dir of pathDirs) {
+        if (!dir) continue;
+        const candidate = path.join(dir, 'bwrap');
+        try {
+            if (fs.existsSync(candidate)) {
+                return { platform: label, ok: true, detail: `bwrap at ${candidate}` };
+            }
+        } catch { /* keep looking */ }
+    }
+    return {
+        platform: label,
+        ok: false,
+        detail: 'bubblewrap not found on PATH',
+        advice: 'sudo apt install bubblewrap',
+    };
 }
 
 // ── Codex rollout JSONL parsing ─────────────────────────────────────────────
@@ -1065,6 +1174,8 @@ module.exports = {
     consolidatePermissionsToGlobal,
     applyCodexFullAuto,
     applyCodexSandboxMode,
+    applyCodexSandboxNetworkAccess,
+    probeSandboxRuntime,
     setCodexGlobalApprovalPolicy,
     setCodexApprovalPolicyNever,
     setCodexBashAlias,

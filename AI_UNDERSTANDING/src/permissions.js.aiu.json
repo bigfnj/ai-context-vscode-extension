@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "path": "src/permissions.js",
-  "sha1": "7782ed249044e8687f731e5e8c78b4adb22321ae",
-  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, sandbox mode, full-auto alias, and the global approval_policy.",
+  "sha1": "77f33bf2882d9673bdbbd99214dcba43f5709e1e",
+  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, tri-state sandbox mode (workspace-write / danger-full-access / off) plus the [sandbox_workspace_write] network_access section, full-auto alias, the global approval_policy, and a platform sandbox-runtime probe (bwrap on Linux/WSL2).",
   "exports": [
     "readClaudeSettings",
     "writeClaudeSettings",
@@ -18,6 +18,8 @@
     "consolidatePermissionsToGlobal",
     "applyCodexFullAuto",
     "applyCodexSandboxMode",
+    "applyCodexSandboxNetworkAccess",
+    "probeSandboxRuntime",
     "setCodexGlobalApprovalPolicy",
     "setCodexApprovalPolicyNever",
     "setCodexBashAlias",
@@ -64,7 +66,8 @@
   "invariants": [
     "Removal-command filter (rm, del, rmdir, erase, rd …) runs before generalization — destructive commands cannot be hidden behind wildcards.",
     "Codex prefix_rule grammar rejects shell metacharacters (|&;<>$`), env-var prefixes, redirections, heredocs, and wildcards in tokens.",
-    "applyCodexSandboxMode does verify-and-revert: reads the file back after writing and reverts on any mismatch or I/O error.",
+    "applyCodexSandboxMode does verify-and-revert: reads the file back after writing and reverts on any mismatch or I/O error. Mode is tri-state: 'workspace-write' | 'danger-full-access' | null (null removes the line).",
+    "applyCodexSandboxNetworkAccess strips the entire [sandbox_workspace_write] section before re-emitting it — re-enable is idempotent and never duplicates the section.",
     "setCodexApprovalPolicyNever unconditionally strips the legacy [approval_policy.granular] section — current Codex CLI rejects it as a non-unit variant.",
     "consolidatePermissionsToGlobal promotes any perm appearing in ≥ 2 contexts to ~/.claude/settings.json and removes it from per-context stores."
   ],
@@ -73,6 +76,7 @@
     "tokenizeCommand preserves quote marks within tokens; quote stripping is the caller's job.",
     "claudeAllowToCodexRules outright rejects bare `Bash(*)` (too dangerous); strips a single trailing wildcard but rejects wildcards mid-pattern.",
     "extractCodexTrust matches `[projects.\"<root>\"]` headers exactly — small whitespace differences cause it to insert a duplicate section.",
-    "applyCodexSandboxMode operates on per-project .codex/config.toml — NOT the global ~/.codex/config.toml — scope confusion is a recurring bug source."
+    "applyCodexSandboxMode operates on per-project .codex/config.toml — NOT the global ~/.codex/config.toml — scope confusion is a recurring bug source.",
+    "probeSandboxRuntime returns ok=true on macOS and Windows unconditionally; only Linux/WSL2 actually scans PATH for bwrap. /proc/version sniff classifies wsl2 vs linux."
   ]
 }

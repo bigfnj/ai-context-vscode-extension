@@ -147,7 +147,7 @@ function createDefaultContext(name, root = '') {
         m:         { compactedAt: null, compactionVersion: COMPACTION_VERSION },
         createdAt: new Date().toISOString(),
         lastUsed:  null,
-        perms:     { allow: [], codex: 'trusted', safeCommands: [], sandboxMode: false },
+        perms:     { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: null, codexNetworkAccess: false },
     };
 }
 
@@ -165,11 +165,13 @@ function normalizeContext(ctx, name) {
     };
     const srcPerms = src.perms && typeof src.perms === 'object' && !Array.isArray(src.perms) ? src.perms : {};
     const rawAllow = srcPerms.allow || srcPerms.claude || []; // migrate perms.claude → perms.allow
+    const validSandboxModes = new Set(['workspace-write', 'danger-full-access']);
     const perms = {
-        allow:        Array.isArray(rawAllow) ? rawAllow.filter(p => typeof p === 'string' && p.trim()) : [],
-        codex:        typeof srcPerms.codex === 'string' && srcPerms.codex.trim() ? srcPerms.codex.trim() : 'trusted',
-        safeCommands: Array.isArray(srcPerms.safeCommands) ? srcPerms.safeCommands.filter(s => typeof s === 'string' && s.trim()) : [],
-        sandboxMode:  srcPerms.sandboxMode === true,
+        allow:              Array.isArray(rawAllow) ? rawAllow.filter(p => typeof p === 'string' && p.trim()) : [],
+        codex:              typeof srcPerms.codex === 'string' && srcPerms.codex.trim() ? srcPerms.codex.trim() : 'trusted',
+        safeCommands:       Array.isArray(srcPerms.safeCommands) ? srcPerms.safeCommands.filter(s => typeof s === 'string' && s.trim()) : [],
+        codexSandboxMode:   validSandboxModes.has(srcPerms.codexSandboxMode) ? srcPerms.codexSandboxMode : null,
+        codexNetworkAccess: srcPerms.codexNetworkAccess === true,
     };
     return {
         ...base,

@@ -91,14 +91,15 @@ class SettingsViewProvider {
             return { name, root: ctx.root || '', lastUsed: ctx.lastUsed || null };
         });
 
-        let perms = { allow: [], codex: 'trusted', safeCommands: [], sandboxMode: false };
+        let perms = { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: null, codexNetworkAccess: false };
         if (active) {
             const ctx = loadContext(dir, active);
             if (ctx.perms) {
-                perms.allow        = Array.isArray(ctx.perms.allow) ? ctx.perms.allow : [];
-                perms.codex        = typeof ctx.perms.codex === 'string' ? ctx.perms.codex : 'trusted';
-                perms.safeCommands = Array.isArray(ctx.perms.safeCommands) ? ctx.perms.safeCommands : [];
-                perms.sandboxMode  = ctx.perms.sandboxMode === true;
+                perms.allow              = Array.isArray(ctx.perms.allow) ? ctx.perms.allow : [];
+                perms.codex              = typeof ctx.perms.codex === 'string' ? ctx.perms.codex : 'trusted';
+                perms.safeCommands       = Array.isArray(ctx.perms.safeCommands) ? ctx.perms.safeCommands : [];
+                perms.codexSandboxMode   = (ctx.perms.codexSandboxMode === 'workspace-write' || ctx.perms.codexSandboxMode === 'danger-full-access') ? ctx.perms.codexSandboxMode : null;
+                perms.codexNetworkAccess = ctx.perms.codexNetworkAccess === true;
             }
         }
 
@@ -178,7 +179,11 @@ class SettingsViewProvider {
         })();
 
         const sectionStates = this._getSectionStates() || {};
-        const payload = { type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu, sectionStates };
+        const sandboxRuntime = (() => {
+            try { return require('./permissions').probeSandboxRuntime(); }
+            catch { return { platform: 'unknown', ok: true, detail: '' }; }
+        })();
+        const payload = { type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu, sectionStates, sandboxRuntime };
         for (const surface of this._surfaces) {
             if (!surface.host.visible) continue;
             surface.webview.postMessage(payload);
@@ -257,15 +262,18 @@ class SettingsViewProvider {
                 this.refresh();
                 break;
             }
-            case 'setCodexSandbox': {
+            case 'setCodexSandboxMode': {
                 if (!active) break;
-                const { applyCodexSandboxMode, setCodexApprovalPolicyNever } = require('./permissions');
+                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever } = require('./permissions');
                 const { listContexts, loadContext } = require('./context');
                 const ctx = loadContext(dir, active);
-                const enabling = msg.enabled === true;
-                if (enabling) {
+                const validModes = new Set(['workspace-write', 'danger-full-access']);
+                const newMode = validModes.has(msg.mode) ? msg.mode : null;
+                const priorMode = ctx.perms && ctx.perms.codexSandboxMode || null;
+
+                if (newMode === 'danger-full-access' && priorMode !== 'danger-full-access') {
                     const confirmed = await vscode.window.showWarningMessage(
-                        `Enable Codex sandbox bypass (danger-full-access) for [${active}]?\n\nThis writes sandbox_mode = "danger-full-access" to the project's .codex/config.toml. Use only in authorized environments.`,
+                        `Enable Codex sandbox bypass (danger-full-access) for [${active}]?\n\nThis writes sandbox_mode = "danger-full-access" to the project's .codex/config.toml AND sets approval_policy = "never" globally. Use only in authorized environments.`,
                         { modal: true },
                         'Enable'
                     );
@@ -274,32 +282,38 @@ class SettingsViewProvider {
                         break;
                     }
                 }
-                const result = applyCodexSandboxMode(ctx.root, enabling);
+
+                const result = applyCodexSandboxMode(ctx.root, newMode);
                 if (!result.ok) {
-                    // Hard failure — config write/verify failed. Force the per-context
-                    // flag back to the actual on-disk state and surface the error.
-                    saveContext(dir, active, {
-                        ...ctx,
-                        perms: { ...ctx.perms, sandboxMode: !enabling },
-                    });
                     vscode.window.showErrorMessage(
-                        `Sandbox mode ${enabling ? 'enable' : 'disable'} failed — reverted. ${result.error}`
+                        `Sandbox mode change failed (${newMode || 'off'}) — config not modified. ${result.error}`
                     );
                     this.refresh();
                     break;
                 }
+
+                // Network-access section is only meaningful in workspace-write.
+                // Strip it whenever leaving that mode so stale sections don't linger.
+                const keepNetwork = newMode === 'workspace-write' && ctx.perms && ctx.perms.codexNetworkAccess === true;
+                applyCodexSandboxNetworkAccess(ctx.root, keepNetwork);
+
                 saveContext(dir, active, {
                     ...ctx,
-                    perms: { ...ctx.perms, sandboxMode: enabling },
+                    perms: {
+                        ...ctx.perms,
+                        codexSandboxMode:   newMode,
+                        codexNetworkAccess: keepNetwork ? true : (ctx.perms && ctx.perms.codexNetworkAccess === true && newMode === 'workspace-write'),
+                    },
                 });
-                const anyEnabled = listContexts(dir)
+
+                // Approval policy is only flipped to "never" when at least one
+                // context is in danger-full-access. workspace-write leaves it alone.
+                const anyDanger = listContexts(dir)
                     .map(n => loadContext(dir, n))
-                    .some(c => c && c.perms && c.perms.sandboxMode === true);
-                setCodexApprovalPolicyNever(anyEnabled);
-                if (enabling && this._actions.probeCodex) {
-                    // Soft probe — checks both CLI on PATH and installed VS Code
-                    // Codex extension. Either path is enough. Warns only when
-                    // neither is available; never reverts the config.
+                    .some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
+                setCodexApprovalPolicyNever(anyDanger);
+
+                if (newMode && this._actions.probeCodex) {
                     this._actions.probeCodex().then(probe => {
                         if (!probe.ok) {
                             vscode.window.showWarningMessage(
@@ -308,6 +322,53 @@ class SettingsViewProvider {
                         }
                     });
                 }
+                this.refresh();
+                break;
+            }
+            case 'setCodexNetworkAccess': {
+                if (!active) break;
+                const { applyCodexSandboxNetworkAccess } = require('./permissions');
+                const { loadContext } = require('./context');
+                const ctx = loadContext(dir, active);
+                if (!ctx.perms || ctx.perms.codexSandboxMode !== 'workspace-write') {
+                    // Defensive: only meaningful in workspace-write mode.
+                    this.refresh();
+                    break;
+                }
+                const enabling = msg.enabled === true;
+                const result = applyCodexSandboxNetworkAccess(ctx.root, enabling);
+                if (!result.ok) {
+                    vscode.window.showErrorMessage(`Network access toggle failed: ${result.error}`);
+                    this.refresh();
+                    break;
+                }
+                saveContext(dir, active, {
+                    ...ctx,
+                    perms: { ...ctx.perms, codexNetworkAccess: enabling },
+                });
+                this.refresh();
+                break;
+            }
+            case 'setCodexRecommended': {
+                if (!active) break;
+                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever } = require('./permissions');
+                const { listContexts, loadContext } = require('./context');
+                const ctx = loadContext(dir, active);
+                const m = applyCodexSandboxMode(ctx.root, 'workspace-write');
+                if (!m.ok) {
+                    vscode.window.showErrorMessage(`Recommended setup failed: ${m.error}`);
+                    this.refresh();
+                    break;
+                }
+                applyCodexSandboxNetworkAccess(ctx.root, false);
+                saveContext(dir, active, {
+                    ...ctx,
+                    perms: { ...ctx.perms, codexSandboxMode: 'workspace-write', codexNetworkAccess: false },
+                });
+                const anyDanger = listContexts(dir)
+                    .map(n => loadContext(dir, n))
+                    .some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
+                setCodexApprovalPolicyNever(anyDanger);
                 this.refresh();
                 break;
             }
@@ -443,6 +504,23 @@ input:checked+.slider::before{transform:translateX(12px);opacity:1}
 .sandbox-status{font-size:12px;color:var(--vscode-textLink-foreground,#4fc3f7);font-weight:500}
 .sandbox-desc{font-size:10px;color:var(--vscode-descriptionForeground);margin-top:1px}
 .sandbox-toggle .toggle{margin-top:0;flex-shrink:0}
+.sandbox-radio-group{padding:6px 0 4px;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
+.sandbox-radio-hdr{font-size:12px;font-weight:500;margin-bottom:6px}
+.sandbox-radio{display:flex;align-items:flex-start;gap:6px;padding:4px 0;cursor:pointer}
+.sandbox-radio input[type=radio]{margin-top:2px;flex-shrink:0}
+.sb-rb-label{font-size:12px;font-weight:500;min-width:135px}
+.sb-rb-desc{font-size:10px;color:var(--vscode-descriptionForeground);flex:1}
+.sb-rb-danger .sb-rb-label{color:var(--vscode-errorForeground,#f48771)}
+.sb-recommended{margin-top:6px}
+.sandbox-runtime{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;padding:6px 8px;border-radius:3px;font-size:11px;margin-bottom:6px}
+.sandbox-runtime.rt-ok{background:rgba(80,200,120,.06);border:1px solid rgba(80,200,120,.2)}
+.sandbox-runtime.rt-warn{background:rgba(255,160,60,.08);border:1px solid rgba(255,160,60,.3)}
+.rt-icon{font-weight:700}
+.rt-label{color:var(--vscode-descriptionForeground)}
+.rt-detail{font-family:var(--vscode-editor-font-family,monospace);font-size:10px}
+.rt-advice{flex-basis:100%;margin-top:3px;font-size:10px}
+.rt-advice code{background:var(--vscode-textCodeBlock-background,rgba(255,255,255,.06));padding:1px 4px;border-radius:2px;font-family:var(--vscode-editor-font-family,monospace)}
+.sandbox-caveat{font-size:10px;color:var(--vscode-descriptionForeground);padding:4px 0;font-style:italic;cursor:help;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
 .codex-trust-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
 .codex-trust-row:last-child{border-bottom:none}
 .trust-label{font-size:12px;font-weight:500;white-space:nowrap;margin-right:8px}
@@ -480,7 +558,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [] }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false }, sectionStates: {} };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: null, codexNetworkAccess: false }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false }, sectionStates: {}, sandboxRuntime: null };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -513,10 +591,14 @@ function render() {
     const activeCtx   = contexts.find(c => c.name === active);
     const secList     = Array.isArray(secondaries) ? secondaries : [];
     const agents      = settings.agents || ['claude','codex','copilot'];
-    const claudePerms  = perms.allow || [];
-    const codexTrust   = perms.codex  || 'trusted';
-    const safeCommands = perms.safeCommands || [];
-    const sandboxMode  = perms.sandboxMode === true;
+    const claudePerms      = perms.allow || [];
+    const codexTrust       = perms.codex  || 'trusted';
+    const safeCommands     = perms.safeCommands || [];
+    const codexSandboxMode = (perms.codexSandboxMode === 'workspace-write' || perms.codexSandboxMode === 'danger-full-access') ? perms.codexSandboxMode : null;
+    const codexNetworkAccess = perms.codexNetworkAccess === true;
+    const sandboxOff       = codexSandboxMode === null;
+    const sandboxDanger    = codexSandboxMode === 'danger-full-access';
+    const sandboxRuntime   = S.sandboxRuntime || null;
 
     const prevCard = previous ? \`
         <div class="prev-card">
@@ -565,22 +647,58 @@ function render() {
         <button class="sec full" onclick="send('managePermissions')">Advanced Permissions…</button>
     \` : '<div class="perm-empty">No active context</div>';
 
+    const runtimeRow = sandboxRuntime ? \`
+        <div class="sandbox-runtime \${sandboxRuntime.ok ? 'rt-ok' : 'rt-warn'}">
+            <span class="rt-icon">\${sandboxRuntime.ok ? '✓' : '⚠'}</span>
+            <span class="rt-label">Sandbox runtime (\${esc(sandboxRuntime.platform)}):</span>
+            <span class="rt-detail">\${esc(sandboxRuntime.detail || '')}</span>
+            \${sandboxRuntime.advice ? \`<div class="rt-advice"><code>\${esc(sandboxRuntime.advice)}</code></div>\` : ''}
+        </div>\` : '';
+
     const codexBody = active ? \`
-        <div class="sandbox-toggle">
-            <div class="sandbox-info">
-                <div class="sandbox-label">Sandbox Mode</div>
-                <div class="sandbox-status">\${sandboxMode ? '✓ enabled' : '○ disabled'}</div>
-                <div class="sandbox-desc">\${sandboxMode ? 'danger-full-access' : 'standard sandbox'}</div>
-            </div>
-            <label class="toggle">
-                <input type="checkbox" \${sandboxMode ? 'checked' : ''}
-                    onchange="send('setCodexSandbox', {enabled: this.checked})">
-                <span class="slider"></span>
+        \${runtimeRow}
+        <div class="sandbox-radio-group">
+            <div class="sandbox-radio-hdr">Sandbox Mode</div>
+            <label class="sandbox-radio">
+                <input type="radio" name="sandboxMode" value="off" \${sandboxOff ? 'checked' : ''}
+                    onchange="setSandboxMode(null)">
+                <span class="sb-rb-label">Off</span>
+                <span class="sb-rb-desc">no sandbox_mode line — Codex default</span>
+            </label>
+            <label class="sandbox-radio">
+                <input type="radio" name="sandboxMode" value="workspace-write" \${codexSandboxMode==='workspace-write' ? 'checked' : ''}
+                    onchange="setSandboxMode('workspace-write')">
+                <span class="sb-rb-label">Workspace-write</span>
+                <span class="sb-rb-desc">writes inside workspace; network off; approval prompts at default</span>
+            </label>
+            <label class="sandbox-radio sb-rb-danger">
+                <input type="radio" name="sandboxMode" value="danger-full-access" \${sandboxDanger ? 'checked' : ''}
+                    onchange="setSandboxMode('danger-full-access')">
+                <span class="sb-rb-label">Danger-full-access</span>
+                <span class="sb-rb-desc">no sandbox; sets approval_policy = "never" globally</span>
             </label>
         </div>
+        \${codexSandboxMode === 'workspace-write' ? \`
+            <div class="sandbox-toggle">
+                <div class="sandbox-info">
+                    <div class="sandbox-label">Network Access</div>
+                    <div class="sandbox-status">\${codexNetworkAccess ? '✓ enabled' : '○ disabled'}</div>
+                    <div class="sandbox-desc">\${codexNetworkAccess ? '[sandbox_workspace_write] network_access = true' : 'workspace-only writes; no network'}</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" \${codexNetworkAccess ? 'checked' : ''}
+                        onchange="send('setCodexNetworkAccess', {enabled: this.checked})">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        \` : ''}
+        <button class="sec full sb-recommended" onclick="send('setCodexRecommended')" title="Sets sandbox_mode = workspace-write and network_access = false">⚙ Recommended setup (workspace-write, no network)</button>
+        <div class="sandbox-caveat" title="Some Codex VS Code extension versions ignore config.toml overrides for sandbox_mode / approval_policy. Verify by asking Codex to write outside the workspace — it should refuse or prompt.">
+            ⓘ Some Codex VS Code extension versions ignore config.toml overrides — verify behavior after toggling.
+        </div>
         <div class="codex-trust-row">
-            <div class="trust-label">Trust Level \${sandboxMode ? '<span class="inactive">(inactive — sandbox mode on)</span>' : ''}</div>
-            <select onchange="setCodexTrust(this.value)" \${sandboxMode ? 'disabled' : ''} class="\${sandboxMode ? 'disabled' : ''}">
+            <div class="trust-label">Trust Level \${sandboxDanger ? '<span class="inactive">(inactive — danger-full-access on)</span>' : ''}</div>
+            <select onchange="setCodexTrust(this.value)" \${sandboxDanger ? 'disabled' : ''} class="\${sandboxDanger ? 'disabled' : ''}">
                 \${TRUST_LEVELS.map(l => \`<option value="\${l}" \${l===codexTrust?'selected':''}>\${l}</option>\`).join('')}
             </select>
         </div>
@@ -745,8 +863,8 @@ function setCodexTrust(level) {
     vscode.postMessage({ type: 'setCodexTrust', level });
 }
 
-function setCodexSandbox(data) {
-    vscode.postMessage({ type: 'setCodexSandbox', ...data });
+function setSandboxMode(mode) {
+    vscode.postMessage({ type: 'setCodexSandboxMode', mode });
 }
 
 function renderRemovalButton() {

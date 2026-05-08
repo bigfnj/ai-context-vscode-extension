@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 const aiu = require('./aiu');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, setCodexApprovalPolicyNever, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
 
 const {
     getCtxDir,
@@ -123,16 +123,14 @@ function getMaxSecondaries() {
 }
 
 // Re-derive the global Codex approval_policy line from the union of all
-// contexts' sandboxMode flags. If ANY context has sandbox bypass enabled,
-// approval_policy = "never" is set globally (no-friction posture). When the
-// last sandboxed context is disabled, the line is removed. Called from the
-// sandbox-toggle handler and on context bootstrap to keep ~/.codex/config.toml
-// in sync with the truth in the per-context store.
+// contexts' codexSandboxMode values. Only `danger-full-access` flips the
+// global policy to "never"; `workspace-write` is approval-friendly by design
+// and intentionally leaves the policy alone.
 function syncCodexApprovalPolicyToSandbox(dir) {
-    const anyEnabled = listContexts(dir)
+    const anyDanger = listContexts(dir)
         .map(n => loadContext(dir, n))
-        .some(c => c && c.perms && c.perms.sandboxMode === true);
-    setCodexApprovalPolicyNever(anyEnabled);
+        .some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
+    setCodexApprovalPolicyNever(anyDanger);
 }
 
 function autoPromoteEnabled() {
@@ -377,10 +375,11 @@ function injectAndApplyPerms(dir, name, wsStateRef) {
         result = autoInject(ctx);
     }
     if (ctx.perms) {
-        const allow        = ctx.perms.allow || [];
-        const codexTrust   = ctx.perms.codex || 'trusted';
-        const safeCommands = ctx.perms.safeCommands || [];
-        const sandboxMode  = ctx.perms.sandboxMode === true;
+        const allow              = ctx.perms.allow || [];
+        const codexTrust         = ctx.perms.codex || 'trusted';
+        const safeCommands       = ctx.perms.safeCommands || [];
+        const codexSandboxMode   = (ctx.perms.codexSandboxMode === 'workspace-write' || ctx.perms.codexSandboxMode === 'danger-full-access') ? ctx.perms.codexSandboxMode : null;
+        const codexNetworkAccess = ctx.perms.codexNetworkAccess === true && codexSandboxMode === 'workspace-write';
         applyClaudePerms(allow);
         applyCodexSafeCommands([...safeCommands, ...deriveSafeCommandsFromAllow(allow)]);
         // Push our per-context wildcards back into ~/.codex/rules/default.rules
@@ -388,7 +387,8 @@ function injectAndApplyPerms(dir, name, wsStateRef) {
         // sessions opened in this context inherit the harvested approvals
         // without re-prompting. Symmetric with applyClaudePerms.
         applyCodexRulesFile(claudeAllowToCodexRules(allow));
-        applyCodexSandboxMode(ctx.root, sandboxMode);
+        applyCodexSandboxMode(ctx.root, codexSandboxMode);
+        applyCodexSandboxNetworkAccess(ctx.root, codexNetworkAccess);
         syncCodexApprovalPolicyToSandbox(dir);
         if (codexTrust === 'full-auto') {
             applyCodexFullAuto(true);
@@ -1140,7 +1140,9 @@ function activate(context) {
             const ctx = loadContext(dir, ctxName);
             const claudePerms = (ctx.perms && ctx.perms.allow) ? ctx.perms.allow : [];
             const codexTrust  = (ctx.perms && ctx.perms.codex)  ? ctx.perms.codex  : 'trusted';
-            const sandboxMode = ctx.perms && ctx.perms.sandboxMode === true;
+            const sandboxMode = (ctx.perms && (ctx.perms.codexSandboxMode === 'workspace-write' || ctx.perms.codexSandboxMode === 'danger-full-access')) ? ctx.perms.codexSandboxMode : null;
+            const sandboxLabel = sandboxMode ? sandboxMode : 'off';
+            const trustInactive = sandboxMode === 'danger-full-access';
 
             const items = [
                 ...claudePerms.map(p => ({
@@ -1150,16 +1152,16 @@ function activate(context) {
                     _perm:       p,
                 })),
                 {
-                    label:       `$(zap)  Codex Sandbox Mode: ${sandboxMode ? '$(check) enabled' : '$(circle-slash) disabled'}`,
-                    description: sandboxMode ? 'danger-full-access — click to disable' : 'click to enable',
+                    label:       `$(zap)  Codex Sandbox Mode: ${sandboxLabel}`,
+                    description: 'click to change',
                     _type:       'sandbox',
                 },
                 {
-                    label:       sandboxMode
-                        ? `$(shield)  Codex trust: ${codexTrust}  (inactive — sandbox mode on)`
+                    label:       trustInactive
+                        ? `$(shield)  Codex trust: ${codexTrust}  (inactive — danger-full-access on)`
                         : `$(shield)  Codex trust: ${codexTrust}`,
-                    description: sandboxMode ? '' : 'click to change',
-                    _type:       sandboxMode ? 'noop' : 'codex',
+                    description: trustInactive ? '' : 'click to change',
+                    _type:       trustInactive ? 'noop' : 'codex',
                 },
                 {
                     label:       '$(close)  Close',
@@ -1168,7 +1170,7 @@ function activate(context) {
             ];
 
             const pick = await vscode.window.showQuickPick(items, {
-                placeHolder: `[${ctxName}] — ${claudePerms.length} Claude perm(s) · Codex: ${codexTrust}${sandboxMode ? ' · sandbox ON' : ''}`,
+                placeHolder: `[${ctxName}] — ${claudePerms.length} Claude perm(s) · Codex: ${codexTrust} · sandbox: ${sandboxLabel}`,
                 matchOnDescription: true,
             });
 
@@ -1193,31 +1195,46 @@ function activate(context) {
 
             if (pick._type === 'sandbox') {
                 const current = loadContext(dir, ctxName);
-                const enabling = !(current.perms && current.perms.sandboxMode === true);
-                if (enabling) {
+                const modeOptions = [
+                    { label: 'Off',                _mode: null,                  description: 'no sandbox_mode line' },
+                    { label: 'workspace-write',    _mode: 'workspace-write',     description: 'safer: workspace-only writes, network off' },
+                    { label: 'danger-full-access', _mode: 'danger-full-access',  description: 'no sandbox; flips approval_policy=never globally' },
+                ].map(o => ({
+                    ...o,
+                    description: o._mode === sandboxMode ? `${o.description} · ● current` : o.description,
+                }));
+                const selected = await vscode.window.showQuickPick(modeOptions, {
+                    placeHolder: 'Select Codex sandbox mode',
+                });
+                if (!selected) continue;
+                if (selected._mode === sandboxMode) continue;
+
+                if (selected._mode === 'danger-full-access') {
                     const confirm = await vscode.window.showWarningMessage(
-                        `Enable Codex sandbox bypass (danger-full-access) for [${ctxName}]?\n\nThis writes sandbox_mode = "danger-full-access" to the project's .codex/config.toml. Use only in authorized environments.`,
+                        `Enable Codex sandbox bypass (danger-full-access) for [${ctxName}]?\n\nThis writes sandbox_mode = "danger-full-access" to the project's .codex/config.toml AND sets approval_policy = "never" globally. Use only in authorized environments.`,
                         { modal: true },
                         'Enable'
                     );
                     if (confirm !== 'Enable') continue;
                 }
-                const sbResult = applyCodexSandboxMode(current.root, enabling);
+                const sbResult = applyCodexSandboxMode(current.root, selected._mode);
                 if (!sbResult.ok) {
-                    saveContext(dir, ctxName, {
-                        ...current,
-                        perms: { ...current.perms, sandboxMode: !enabling },
-                    });
                     vscode.window.showErrorMessage(
-                        `Sandbox mode ${enabling ? 'enable' : 'disable'} failed — reverted. ${sbResult.error}`
+                        `Sandbox mode change failed (${selected._mode || 'off'}) — config not modified. ${sbResult.error}`
                     );
                 } else {
+                    const keepNetwork = selected._mode === 'workspace-write' && current.perms && current.perms.codexNetworkAccess === true;
+                    applyCodexSandboxNetworkAccess(current.root, keepNetwork);
                     saveContext(dir, ctxName, {
                         ...current,
-                        perms: { ...current.perms, sandboxMode: enabling },
+                        perms: {
+                            ...current.perms,
+                            codexSandboxMode:   selected._mode,
+                            codexNetworkAccess: keepNetwork,
+                        },
                     });
                     syncCodexApprovalPolicyToSandbox(dir);
-                    if (enabling) {
+                    if (selected._mode) {
                         probeCodex().then(probe => {
                             if (!probe.ok) {
                                 vscode.window.showWarningMessage(

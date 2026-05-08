@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/extension.js",
-  "sha1": "2e3ec46eb3a0ab077a09e214040e820917469955",
+  "sha1": "86fa9b4082adc7aa8e88fa2ac5bdaa28541ff49a",
   "purpose": "Extension entrypoint. Wires up the workspace context store, settings webview, command surface, file watchers (.json/.json.update sidecars, .cwd, ~/.claude, ~/.codex), and forwards activation/deactivation to the AI Understanding subsystem (aiu.js).",
   "exports": [
     "activate",
@@ -43,7 +43,8 @@
     "Every registered command and watcher is pushed to context.subscriptions for VS Code to dispose on deactivate.",
     "trackedWsState wraps raw wsState so any ACTIVE_KEY mutation refreshes the status bar AND the settings webview.",
     "On activation, a one-time sweep consumes any orphan *.json.update sidecars left from prior sessions.",
-    "Permission watcher mutations to ~/.claude/settings.json or ~/.codex/config.toml are debounced and re-applied."
+    "Permission watcher mutations to ~/.claude/settings.json or ~/.codex/config.toml are debounced and re-applied.",
+    "syncCodexApprovalPolicyToSandbox flips global approval_policy=\"never\" only when at least one context is in 'danger-full-access' — workspace-write intentionally does not affect the global policy."
   ],
   "gotchas": [
     "activate() is ~1500 lines — order of setup matters (statusBar must exist before trackedWsState, etc.).",

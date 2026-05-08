@@ -5,6 +5,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.1.0] — Codex sandbox mode: tri-state with workspace-write
+
+Reshapes the per-project Codex sandbox toggle around the three modes the
+Codex CLI actually supports, surfaces the platform sandbox runtime, and
+decouples the global approval-policy flip from `workspace-write` so the
+"safer default" is actually the safer default.
+
+### Changed (behavior change)
+
+- **`workspace-write` no longer suppresses approval prompts.** In v3.10 the
+  toggle wrote `approval_policy = "never"` globally whenever any context had
+  sandbox bypass enabled, because the only available mode was
+  `danger-full-access` and the goal was zero friction. Now that
+  `workspace-write` is selectable, only `danger-full-access` flips the global
+  policy. Pick `workspace-write` if you want the workspace boundary AND
+  Codex's normal approval prompts (e.g. on `python3 …`, network calls,
+  writes outside the workspace). Pick `danger-full-access` if you still want
+  the prior zero-friction posture.
+- Per-project setting renamed: `perms.sandboxMode: bool` →
+  `perms.codexSandboxMode: 'workspace-write' | 'danger-full-access' | null`.
+  Stored context JSONs were cleaned of the legacy boolean as part of the
+  release; no migration is performed at load time.
+
+### Added
+
+- **Tri-state radio group** in the settings panel: Off / Workspace-write /
+  Danger-full-access. Quick-pick menu offers the same three options.
+- **`network_access` sub-toggle** for `workspace-write`. When enabled, writes
+  `[sandbox_workspace_write] network_access = true` to the project's
+  `.codex/config.toml`; removed otherwise. Hidden in any other mode.
+- **"Recommended setup" button** — sets `workspace-write` +
+  `network_access = false` in one click. Matches Codex's documented default
+  for normal development.
+- **Sandbox runtime probe** — the panel shows whether the platform's sandbox
+  prerequisite is satisfied:
+  - macOS / Windows native: always green (Seatbelt / PowerShell built-in).
+  - Linux / WSL2: scans PATH for `bwrap`. If missing, surfaces the
+    `sudo apt install bubblewrap` advice inline.
+- **VS Code extension caveat** noted in the panel — some Codex VS Code
+  extension versions ignore `config.toml` overrides
+  ([openai/codex#10540](https://github.com/openai/codex/issues/10540));
+  hover for guidance on verifying the toggle landed.
+- `applyCodexSandboxNetworkAccess(projectRoot, enabled)` and
+  `probeSandboxRuntime()` in `permissions.js`.
+- Unit tests covering all three modes' write/remove correctness, the
+  `network_access` section round-trip, runtime probe shape, and
+  context normalization (legacy boolean stripped, invalid enum coerced).
+
+---
+
 ## [4.0.0] — AI Understanding: feature-complete
 
 Closes out the five-phase rollout of AI Understanding. The major bump signals

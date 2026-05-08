@@ -86,28 +86,60 @@ and Codex so you are not re-prompted for already-approved commands in new sessio
 
 ### Codex sandbox mode
 
-Per-project toggle in the sidebar (Codex Settings section) that enables Codex's
-`danger-full-access` sandbox bypass. When enabled:
+Per-project radio group in the sidebar (Codex Settings section) selects one of
+three modes for the project's `.codex/config.toml`:
 
-- Writes `sandbox_mode = "danger-full-access"` to the project's `.codex/config.toml`
-- Codex gains unrestricted file and command access for that project
-- **Also writes `approval_policy = "never"` globally** in `~/.codex/config.toml`
-  so approval prompts (which run *before* sandbox execution and would otherwise
-  re-introduce friction on language runtimes, network calls, etc.) are
-  suppressed in lockstep
-- Useful for authorized testing, pen testing, or environments where sandbox restrictions
-  are not needed
-- Confirmation modal warns before enabling
+| Mode | What it writes | Approval prompts | Use when |
+|---|---|---|---|
+| **Off** | no `sandbox_mode` line | Codex default | you want Codex's built-in default behavior |
+| **Workspace-write** *(recommended)* | `sandbox_mode = "workspace-write"` | Codex default — you'll see prompts on commands that touch outside the workspace, network, etc. | normal development |
+| **Danger-full-access** | `sandbox_mode = "danger-full-access"` plus global `approval_policy = "never"` | suppressed | authorized testing / environments where sandbox restrictions aren't needed |
 
-Cross-project semantics: enabling sandbox in any one project sets the global
-`approval_policy = "never"` line. Disabling only removes the line when **no
-other context** still has sandbox enabled. The legacy
-`[approval_policy.granular]` section is also stripped on write, because current
+Switching to **Danger-full-access** shows a confirmation modal before writing.
+
+A **"Recommended setup"** button below the radio group sets Workspace-write +
+`network_access = false` in one click — the everyday default the Codex docs
+suggest.
+
+#### Network access sub-toggle (Workspace-write only)
+
+When in Workspace-write, an additional toggle controls network access:
+
+- **Off** (default) — no `[sandbox_workspace_write]` section in `.codex/config.toml`;
+  Codex blocks network calls.
+- **On** — writes `[sandbox_workspace_write]\nnetwork_access = true`. Use when
+  the task genuinely needs package downloads, API calls, doc fetches, etc.
+
+The section is automatically stripped when leaving Workspace-write so stale
+config doesn't linger in any other mode.
+
+#### Cross-project approval policy
+
+Only **Danger-full-access** flips the global `approval_policy = "never"` line in
+`~/.codex/config.toml` — the policy is set whenever any context is in
+Danger-full-access and removed when the last one steps back. Workspace-write
+intentionally does not touch the global policy, so its approval-prompt behavior
+matches Codex's documented intent. The legacy
+`[approval_policy.granular]` section is stripped on write, because current
 Codex rejects it as an invalid TOML form and silently falls back to
 `on-request`, defeating the policy override.
 
-This uses the **official Codex configuration mechanism** (not an exploit) and respects
-admin-enforced `requirements.toml` restrictions.
+#### Platform sandbox runtime
+
+The panel shows whether your platform's sandbox prerequisite is in place:
+
+- **macOS** — Seatbelt is built in; always green.
+- **Windows native** — PowerShell native sandbox is built in; always green.
+- **Linux / WSL2** — needs `bwrap` (bubblewrap) on `PATH`. If missing, the
+  panel surfaces `sudo apt install bubblewrap` inline.
+
+#### Caveat
+
+Some Codex VS Code extension versions ignore `config.toml` overrides for
+`sandbox_mode` and `approval_policy`
+([openai/codex#10540](https://github.com/openai/codex/issues/10540)). After
+toggling, verify by asking Codex to write outside the workspace — it should
+refuse or prompt according to the mode you picked.
 
 ### Codex trust level
 
@@ -121,8 +153,9 @@ trust dropdown in the sidebar supports:
 | `auto` | Codex uses its own heuristic. |
 | `untrusted` | Sets `trust_level = "untrusted"`. Codex prompts for every action. |
 
-When Sandbox Mode is enabled, the Trust Level setting is inactive (greyed out) since
-sandbox bypass supersedes trust-based restrictions.
+When Sandbox Mode is set to **Danger-full-access**, the Trust Level setting is
+inactive (greyed out) since sandbox bypass supersedes trust-based restrictions.
+Trust is fully active in Off and Workspace-write modes.
 
 Setting `full-auto` on a project activates it globally (not just for that project),
 since Codex's full-auto mode is a session-level flag. The `aiContext.codexFullAuto`
