@@ -662,6 +662,70 @@ function testProbeSandboxRuntime() {
     }
 }
 
+function testProbeCloudRequirements() {
+    // Swap HOME so probeCloudRequirements reads from our tmp dir.
+    const origHome = process.env.HOME;
+    const home = tmpDir();
+    process.env.HOME = home;
+    try {
+        // No cache file → returns null
+        assert.strictEqual(permissions.probeCloudRequirements(), null, 'no cache file → null');
+
+        fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+        const cachePath = path.join(home, '.codex', 'cloud-requirements-cache.json');
+
+        // Active cache with restrictions
+        const future = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+        const past = new Date(Date.now() - 60 * 1000).toISOString();
+        const tomlActive = [
+            'allowed_sandbox_modes = ["read-only", "workspace-write"]',
+            'allowed_approval_policies = ["on-request", "untrusted"]',
+            'allowed_web_search_modes = ["cached"]',
+            '[[rules.prefix_rules]]',
+            'pattern = [{ any_of = ["python"] }]',
+            'decision = "prompt"',
+            '[[rules.prefix_rules]]',
+            'decision = "prompt"',
+        ].join('\n');
+        fs.writeFileSync(cachePath, JSON.stringify({
+            signed_payload: { expires_at: future, account_id: 'acct-1', contents: tomlActive },
+        }), 'utf-8');
+        const r1 = permissions.probeCloudRequirements();
+        assert.ok(r1 && r1.active === true, 'active cache returns active=true');
+        assert.strictEqual(r1.expired, false, 'unexpired cache reads as not expired');
+        assert.deepStrictEqual(r1.sandboxAllowed, ['read-only', 'workspace-write'], 'sandbox list parsed');
+        assert.deepStrictEqual(r1.approvalAllowed, ['on-request', 'untrusted'], 'approval list parsed');
+        assert.strictEqual(r1.prefixRulesPromptCount, 2, 'prompt-rule count counts both blocks');
+
+        // Expired cache
+        fs.writeFileSync(cachePath, JSON.stringify({
+            signed_payload: { expires_at: past, contents: 'allowed_sandbox_modes = ["read-only"]' },
+        }), 'utf-8');
+        const r2 = permissions.probeCloudRequirements();
+        assert.strictEqual(r2.expired, true, 'past expires_at marked expired');
+
+        // Malformed JSON → null
+        fs.writeFileSync(cachePath, '{ not json', 'utf-8');
+        assert.strictEqual(permissions.probeCloudRequirements(), null, 'malformed cache → null');
+
+        // Missing signed_payload → null
+        fs.writeFileSync(cachePath, JSON.stringify({}), 'utf-8');
+        assert.strictEqual(permissions.probeCloudRequirements(), null, 'missing payload → null');
+
+        // Missing keys in TOML → arrays come back null
+        fs.writeFileSync(cachePath, JSON.stringify({
+            signed_payload: { expires_at: future, contents: '# empty' },
+        }), 'utf-8');
+        const r3 = permissions.probeCloudRequirements();
+        assert.strictEqual(r3.sandboxAllowed, null, 'missing sandbox key → null array');
+        assert.strictEqual(r3.approvalAllowed, null, 'missing approval key → null array');
+    } finally {
+        if (origHome === undefined) delete process.env.HOME;
+        else process.env.HOME = origHome;
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+}
+
 function testContextNormalizeSandboxFields() {
     const dir = tmpDir();
     // Legacy boolean field is intentionally NOT migrated — fields are removed
@@ -701,6 +765,7 @@ testTemplates();
 testApplyCodexSandboxMode();
 testApplyCodexSandboxNetworkAccess();
 testProbeSandboxRuntime();
+testProbeCloudRequirements();
 testContextNormalizeSandboxFields();
 
 console.log('unit tests passed');

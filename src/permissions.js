@@ -838,6 +838,51 @@ function probeSandboxRuntime() {
     };
 }
 
+// Reads the locally-cached cloud requirements (managed Codex deployments,
+// e.g. enterprise / ChatGPT-team accounts) and reports which sandbox modes
+// and approval policies are allowed. Returns null when no cache exists
+// (personal / unmanaged Codex installs hit this branch). When restrictions
+// are present, choices outside `sandboxAllowed` / `approvalAllowed` will be
+// silently downgraded by Codex at runtime to the policy-allowed fallback.
+//
+// Cache file: ~/.codex/cloud-requirements-cache.json — a JSON envelope
+// whose `signed_payload.contents` is a TOML document. We parse the few
+// keys we care about with regex to avoid pulling in a TOML dependency.
+function probeCloudRequirements() {
+    const cachePath = path.join(os.homedir(), '.codex', 'cloud-requirements-cache.json');
+    if (!fs.existsSync(cachePath)) return null;
+    let raw;
+    try {
+        raw = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+    } catch { return null; }
+    const payload = raw && raw.signed_payload;
+    if (!payload || typeof payload.contents !== 'string') return null;
+    const toml = payload.contents;
+    const expiresAt = payload.expires_at || null;
+    const expired = !!(expiresAt && new Date(expiresAt) < new Date());
+
+    const extractList = (key) => {
+        const m = toml.match(new RegExp(`^${key}\\s*=\\s*\\[([^\\]]*)\\]`, 'm'));
+        if (!m) return null;
+        return m[1]
+            .split(',')
+            .map(s => s.trim().replace(/^["']|["']$/g, ''))
+            .filter(Boolean);
+    };
+
+    return {
+        active: true,
+        expired,
+        expiresAt,
+        sandboxAllowed:   extractList('allowed_sandbox_modes'),
+        approvalAllowed:  extractList('allowed_approval_policies'),
+        webSearchAllowed: extractList('allowed_web_search_modes'),
+        prefixRulesPromptCount: (toml.match(/decision\s*=\s*"prompt"/g) || []).length,
+        accountId: payload.account_id || null,
+        source: 'cloud-requirements-cache.json',
+    };
+}
+
 // ── Codex rollout JSONL parsing ─────────────────────────────────────────────
 // Codex writes per-session transcripts to ~/.codex/sessions/<Y>/<M>/<D>/
 // rollout-<TS>-<UUID>.jsonl. Each event_msg.exec_command_end event carries the
@@ -1176,6 +1221,7 @@ module.exports = {
     applyCodexSandboxMode,
     applyCodexSandboxNetworkAccess,
     probeSandboxRuntime,
+    probeCloudRequirements,
     setCodexGlobalApprovalPolicy,
     setCodexApprovalPolicyNever,
     setCodexBashAlias,

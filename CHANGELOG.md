@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.1.1] — Detect cloud-managed Codex requirements
+
+Surfaces restrictions imposed by enterprise / managed-account Codex
+deployments before the user picks a sandbox mode that would be silently
+downgraded at runtime.
+
+### Added
+
+- `probeCloudRequirements()` in `permissions.js` — reads
+  `~/.codex/cloud-requirements-cache.json` (the local cache of the signed
+  cloud-requirements payload), parses `allowed_sandbox_modes`,
+  `allowed_approval_policies`, `allowed_web_search_modes`, and counts
+  `decision = "prompt"` prefix-rule groups. Returns `null` for personal /
+  unmanaged installs (no cache file).
+- Settings panel **cloud requirements banner** (above the radio group) when
+  restrictions are active — shows allowed sandbox modes, allowed approval
+  policies, prefix-rule prompt count, and the cache expiry timestamp.
+- Sandbox-mode radio options that fall outside the allowed set render with
+  a `⛔ blocked by policy` tag, dimmed appearance, disabled input, and a
+  tooltip explaining that Codex would downgrade the value at runtime.
+- Defense-in-depth: the `setCodexSandboxMode` handler also verifies the
+  picked mode against the cloud allow set and refuses to write a value
+  Codex would reject.
+- Unit tests for the parser cover active / expired / malformed / empty
+  caches and missing keys.
+
+### Notes for managed-account users
+
+Cloud requirements also include `[[rules.prefix_rules]]` with
+`decision = "prompt"` for command groups like `python`, `node`, `npm`, `pip`,
+`docker`, `kubectl`, `curl`, `wget`, `ssh`, `bash`, `zsh`. Those prompts
+**cannot** be skipped via local `~/.codex/rules/default.rules` or
+`approval_policy = "untrusted"` — the cloud rules override local rules.
+Only commands not covered by the cloud's prefix-rule groups can be
+short-circuited via the per-project trust + local rules path.
+
+---
+
 ## [4.1.0] — Codex sandbox mode: tri-state with workspace-write
 
 Reshapes the per-project Codex sandbox toggle around the three modes the

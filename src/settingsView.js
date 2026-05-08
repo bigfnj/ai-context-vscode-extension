@@ -183,7 +183,11 @@ class SettingsViewProvider {
             try { return require('./permissions').probeSandboxRuntime(); }
             catch { return { platform: 'unknown', ok: true, detail: '' }; }
         })();
-        const payload = { type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu, sectionStates, sandboxRuntime };
+        const cloudReqs = (() => {
+            try { return require('./permissions').probeCloudRequirements(); }
+            catch { return null; }
+        })();
+        const payload = { type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu, sectionStates, sandboxRuntime, cloudReqs };
         for (const surface of this._surfaces) {
             if (!surface.host.visible) continue;
             surface.webview.postMessage(payload);
@@ -264,12 +268,24 @@ class SettingsViewProvider {
             }
             case 'setCodexSandboxMode': {
                 if (!active) break;
-                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever } = require('./permissions');
+                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever, probeCloudRequirements } = require('./permissions');
                 const { listContexts, loadContext } = require('./context');
                 const ctx = loadContext(dir, active);
                 const validModes = new Set(['workspace-write', 'danger-full-access']);
                 const newMode = validModes.has(msg.mode) ? msg.mode : null;
                 const priorMode = ctx.perms && ctx.perms.codexSandboxMode || null;
+
+                // Cloud-requirements veto: refuse to write a mode that would
+                // be silently downgraded at runtime. Local config still gets
+                // written for null (Off) and for any mode in the allow set.
+                const cr = probeCloudRequirements();
+                if (cr && cr.active && !cr.expired && Array.isArray(cr.sandboxAllowed) && newMode && !cr.sandboxAllowed.includes(newMode)) {
+                    vscode.window.showWarningMessage(
+                        `Codex cloud requirements forbid "${newMode}" (allowed: ${cr.sandboxAllowed.join(', ')}). Setting not applied — Codex would downgrade it at runtime regardless.`
+                    );
+                    this.refresh();
+                    break;
+                }
 
                 if (newMode === 'danger-full-access' && priorMode !== 'danger-full-access') {
                     const confirmed = await vscode.window.showWarningMessage(
@@ -521,6 +537,13 @@ input:checked+.slider::before{transform:translateX(12px);opacity:1}
 .rt-advice{flex-basis:100%;margin-top:3px;font-size:10px}
 .rt-advice code{background:var(--vscode-textCodeBlock-background,rgba(255,255,255,.06));padding:1px 4px;border-radius:2px;font-family:var(--vscode-editor-font-family,monospace)}
 .sandbox-caveat{font-size:10px;color:var(--vscode-descriptionForeground);padding:4px 0;font-style:italic;cursor:help;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
+.cloud-reqs-banner{background:rgba(255,160,60,.10);border:1px solid rgba(255,160,60,.40);border-radius:3px;padding:6px 8px;margin-bottom:8px;font-size:11px}
+.cb-title{font-weight:600;color:var(--vscode-editorWarning-foreground,#ffa040);margin-bottom:4px}
+.cb-detail{font-family:var(--vscode-editor-font-family,monospace);font-size:10px;color:var(--vscode-foreground);padding:1px 0}
+.cb-meta{font-size:9px;color:var(--vscode-descriptionForeground);margin-top:4px;font-style:italic}
+.sb-rb-blocked{opacity:.55;cursor:not-allowed}
+.sb-rb-blocked input[type=radio]{cursor:not-allowed}
+.sb-rb-policy{color:var(--vscode-errorForeground,#f48771);font-size:9px;font-weight:600;margin-left:4px;text-transform:uppercase;letter-spacing:.04em}
 .codex-trust-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--vscode-widget-border,rgba(255,255,255,.05))}
 .codex-trust-row:last-child{border-bottom:none}
 .trust-label{font-size:12px;font-weight:500;white-space:nowrap;margin-right:8px}
@@ -558,7 +581,7 @@ select:disabled{opacity:.5;cursor:not-allowed}
 <div id="root"></div>
 <script>
 const vscode = acquireVsCodeApi();
-let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: null, codexNetworkAccess: false }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false }, sectionStates: {}, sandboxRuntime: null };
+let S = { active: null, previous: null, contexts: [], settings: {}, perms: { allow: [], codex: 'trusted', safeCommands: [], codexSandboxMode: null, codexNetworkAccess: false }, removalCount: 0, secondaries: [], version: '', activeHealth: null, templates: [], aiu: { workspaceOpen: false }, sectionStates: {}, sandboxRuntime: null, cloudReqs: null };
 
 const ALL_AGENTS  = ['claude','codex','copilot','cursor','windsurf','kilo'];
 const AGENT_FILES = { claude:'CLAUDE.md', codex:'AGENTS.md', copilot:'copilot-instructions.md', cursor:'.cursorrules', windsurf:'.windsurfrules', kilo:'AGENTS.md' };
@@ -599,6 +622,17 @@ function render() {
     const sandboxOff       = codexSandboxMode === null;
     const sandboxDanger    = codexSandboxMode === 'danger-full-access';
     const sandboxRuntime   = S.sandboxRuntime || null;
+    const cloudReqs        = S.cloudReqs || null;
+    const cloudActive      = !!(cloudReqs && cloudReqs.active && !cloudReqs.expired);
+    const sandboxAllowed   = cloudActive && Array.isArray(cloudReqs.sandboxAllowed) ? cloudReqs.sandboxAllowed : null;
+    const approvalAllowed  = cloudActive && Array.isArray(cloudReqs.approvalAllowed) ? cloudReqs.approvalAllowed : null;
+    const blocked = (mode) => {
+        if (!sandboxAllowed) return false;
+        if (mode === null) return false; // 'Off' is always permitted (cloud has its own default)
+        return !sandboxAllowed.includes(mode);
+    };
+    const dangerBlocked = blocked('danger-full-access');
+    const wsWriteBlocked = blocked('workspace-write');
 
     const prevCard = previous ? \`
         <div class="prev-card">
@@ -655,7 +689,18 @@ function render() {
             \${sandboxRuntime.advice ? \`<div class="rt-advice"><code>\${esc(sandboxRuntime.advice)}</code></div>\` : ''}
         </div>\` : '';
 
+    const cloudBanner = cloudActive ? \`
+        <div class="cloud-reqs-banner">
+            <div class="cb-title">⚠ Cloud-managed Codex requirements active</div>
+            <div class="cb-detail">sandbox_mode: \${esc((sandboxAllowed||[]).join(', ') || 'unrestricted')}</div>
+            <div class="cb-detail">approval_policy: \${esc((approvalAllowed||[]).join(', ') || 'unrestricted')}</div>
+            \${cloudReqs.prefixRulesPromptCount > 0 ? \`<div class="cb-detail">cloud also forces approval prompts on \${cloudReqs.prefixRulesPromptCount} command-prefix rule group(s) — shells, runtimes, network tools, package managers, etc. — that local rules cannot override</div>\` : ''}
+            <div class="cb-meta">expires \${esc(cloudReqs.expiresAt || 'unknown')} · cached from cloud requirements</div>
+        </div>
+    \` : '';
+
     const codexBody = active ? \`
+        \${cloudBanner}
         \${runtimeRow}
         <div class="sandbox-radio-group">
             <div class="sandbox-radio-hdr">Sandbox Mode</div>
@@ -665,16 +710,18 @@ function render() {
                 <span class="sb-rb-label">Off</span>
                 <span class="sb-rb-desc">no sandbox_mode line — Codex default</span>
             </label>
-            <label class="sandbox-radio">
+            <label class="sandbox-radio \${wsWriteBlocked ? 'sb-rb-blocked' : ''}" title="\${wsWriteBlocked ? 'Blocked by cloud requirements — Codex will downgrade at runtime' : ''}">
                 <input type="radio" name="sandboxMode" value="workspace-write" \${codexSandboxMode==='workspace-write' ? 'checked' : ''}
+                    \${wsWriteBlocked ? 'disabled' : ''}
                     onchange="setSandboxMode('workspace-write')">
-                <span class="sb-rb-label">Workspace-write</span>
+                <span class="sb-rb-label">Workspace-write\${wsWriteBlocked ? ' <span class=\\\\"sb-rb-policy\\\\">⛔ blocked by policy</span>' : ''}</span>
                 <span class="sb-rb-desc">writes inside workspace; network off; approval prompts at default</span>
             </label>
-            <label class="sandbox-radio sb-rb-danger">
+            <label class="sandbox-radio sb-rb-danger \${dangerBlocked ? 'sb-rb-blocked' : ''}" title="\${dangerBlocked ? 'Blocked by cloud requirements — Codex will downgrade to a Restricted/Managed profile at runtime regardless of this setting' : ''}">
                 <input type="radio" name="sandboxMode" value="danger-full-access" \${sandboxDanger ? 'checked' : ''}
+                    \${dangerBlocked ? 'disabled' : ''}
                     onchange="setSandboxMode('danger-full-access')">
-                <span class="sb-rb-label">Danger-full-access</span>
+                <span class="sb-rb-label">Danger-full-access\${dangerBlocked ? ' <span class=\\\\"sb-rb-policy\\\\">⛔ blocked by policy</span>' : ''}</span>
                 <span class="sb-rb-desc">no sandbox; sets approval_policy = "never" globally</span>
             </label>
         </div>

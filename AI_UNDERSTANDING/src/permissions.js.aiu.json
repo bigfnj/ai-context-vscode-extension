@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "path": "src/permissions.js",
-  "sha1": "77f33bf2882d9673bdbbd99214dcba43f5709e1e",
-  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, tri-state sandbox mode (workspace-write / danger-full-access / off) plus the [sandbox_workspace_write] network_access section, full-auto alias, the global approval_policy, and a platform sandbox-runtime probe (bwrap on Linux/WSL2).",
+  "sha1": "b30de8212fee5479e43d2b4597ce803f7689228a",
+  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, tri-state sandbox mode (workspace-write / danger-full-access / off) plus the [sandbox_workspace_write] network_access section, full-auto alias, the global approval_policy, a platform sandbox-runtime probe (bwrap on Linux/WSL2), and a cloud-managed-requirements probe that reads ~/.codex/cloud-requirements-cache.json.",
   "exports": [
     "readClaudeSettings",
     "writeClaudeSettings",
@@ -20,6 +20,7 @@
     "applyCodexSandboxMode",
     "applyCodexSandboxNetworkAccess",
     "probeSandboxRuntime",
+    "probeCloudRequirements",
     "setCodexGlobalApprovalPolicy",
     "setCodexApprovalPolicyNever",
     "setCodexBashAlias",
@@ -77,6 +78,7 @@
     "claudeAllowToCodexRules outright rejects bare `Bash(*)` (too dangerous); strips a single trailing wildcard but rejects wildcards mid-pattern.",
     "extractCodexTrust matches `[projects.\"<root>\"]` headers exactly — small whitespace differences cause it to insert a duplicate section.",
     "applyCodexSandboxMode operates on per-project .codex/config.toml — NOT the global ~/.codex/config.toml — scope confusion is a recurring bug source.",
-    "probeSandboxRuntime returns ok=true on macOS and Windows unconditionally; only Linux/WSL2 actually scans PATH for bwrap. /proc/version sniff classifies wsl2 vs linux."
+    "probeSandboxRuntime returns ok=true on macOS and Windows unconditionally; only Linux/WSL2 actually scans PATH for bwrap. /proc/version sniff classifies wsl2 vs linux.",
+    "probeCloudRequirements parses TOML fields out of the JSON envelope's signed_payload.contents with regex (no TOML lib). Returns null for personal/unmanaged Codex installs (no cache file). expired flag is set when expires_at is in the past, but caller decides what to do — payload is not auto-discarded."
   ]
 }
