@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/permissions.js",
-  "sha1": "b30de8212fee5479e43d2b4597ce803f7689228a",
+  "sha1": "df6bbdb376ebb57c50a7bb80ebcd87b65c7f3613",
   "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, tri-state sandbox mode (workspace-write / danger-full-access / off) plus the [sandbox_workspace_write] network_access section, full-auto alias, the global approval_policy, a platform sandbox-runtime probe (bwrap on Linux/WSL2), and a cloud-managed-requirements probe that reads ~/.codex/cloud-requirements-cache.json.",
   "exports": [
     "readClaudeSettings",
@@ -22,7 +22,9 @@
     "probeSandboxRuntime",
     "probeCloudRequirements",
     "setCodexGlobalApprovalPolicy",
+    "setCodexApprovalPolicy",
     "setCodexApprovalPolicyNever",
+    "deriveApprovalPolicyForSandboxModes",
     "setCodexBashAlias",
     "updateCodexGranularConfig",
     "removeCodexGranularSection",
@@ -69,7 +71,9 @@
     "Codex prefix_rule grammar rejects shell metacharacters (|&;<>$`), env-var prefixes, redirections, heredocs, and wildcards in tokens.",
     "applyCodexSandboxMode does verify-and-revert: reads the file back after writing and reverts on any mismatch or I/O error. Mode is tri-state: 'workspace-write' | 'danger-full-access' | null (null removes the line).",
     "applyCodexSandboxNetworkAccess strips the entire [sandbox_workspace_write] section before re-emitting it — re-enable is idempotent and never duplicates the section.",
-    "setCodexApprovalPolicyNever unconditionally strips the legacy [approval_policy.granular] section — current Codex CLI rejects it as a non-unit variant.",
+    "setCodexApprovalPolicy unconditionally strips the legacy [approval_policy.granular] section — current Codex CLI rejects it as a non-unit variant.",
+    "setCodexApprovalPolicy(null) only removes the line when its current value is 'never' or 'untrusted' (the values we manage); user-set values like 'on-request' are preserved.",
+    "deriveApprovalPolicyForSandboxModes prefers 'never' over 'untrusted' and consults probeCloudRequirements() to detect cloud-managed caps; under cloud cap, workspace-write also yields 'untrusted' for QoL (cloud would downgrade 'never' to 'on-request' anyway).",
     "consolidatePermissionsToGlobal promotes any perm appearing in ≥ 2 contexts to ~/.claude/settings.json and removes it from per-context stores."
   ],
   "gotchas": [

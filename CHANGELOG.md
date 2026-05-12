@@ -5,6 +5,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.1.2] — `approval_policy = "untrusted"` fallback under cloud cap
+
+Stops fighting the silent downgrade. On managed-account installs where the
+cloud forbids `approval_policy = "never"`, the global policy line now falls
+back to `"untrusted"` — the strongest value cloud requirements accept. This
+restores the original quality-of-life intent of the sandbox toggle: combined
+with per-project `trust_level = "trusted"` (already wired) and the
+`~/.codex/rules/default.rules` wildcards harvested from your sessions
+(already wired), Codex skips prompts for any command **not** in the cloud's
+mandatory-prompt prefix-rule groups.
+
+### Changed
+
+- `syncCodexApprovalPolicyToSandbox` (extension.js) now delegates to
+  `deriveApprovalPolicyForSandboxModes()` and writes the result via
+  `setCodexApprovalPolicy()`. Selection logic:
+  - any context in **danger-full-access** → `"never"` if cloud allows it;
+    else `"untrusted"` if allowed; else clear the line.
+  - any context in **workspace-write** + cloud cap active → `"untrusted"`
+    (the cloud would downgrade `"never"` to `"on-request"` anyway, and
+    `"untrusted"` gives you the wildcard-driven prompt-skip we already
+    wired for trusted projects).
+  - **workspace-write on personal/unmanaged install** → policy line
+    untouched (matches v4.1.0 contract — only `danger-full-access` flips
+    global policy when no cloud cap is in force).
+  - all contexts off → clear our managed line (leaves user-set values
+    like `"on-request"` alone).
+
+### Added
+
+- `setCodexApprovalPolicy(value)` in `permissions.js` — generalized writer
+  accepting `'never' | 'untrusted' | null`. Removes our line only when the
+  current value is one we managed (`never`/`untrusted`), preserving any
+  manually-set policy like `on-request`.
+- `deriveApprovalPolicyForSandboxModes({ anyDanger, anyWsWrite })` — pure
+  function that picks the strongest cloud-allowed value for the given mode
+  union. Single source of truth shared between extension.js and
+  settingsView.js handlers.
+- `setCodexApprovalPolicyNever(enabled)` retained as a thin back-compat
+  wrapper around the new writer.
+- Unit tests cover personal-install paths, cloud-cap-allows-untrusted-only,
+  cloud-cap-allows-neither, user-set non-managed value preservation, and
+  invalid-value rejection.
+
+### Notes
+
+The cloud's `[[rules.prefix_rules]]` (`shells`, `runtimes`, `network`,
+`containers`, `package managers`) still force prompts. Per the v4.1.1
+research, local rules cannot relax cloud rules — the merged policy uses
+`max(Allow, Prompt) = Prompt`. This release squeezes the maximum value out
+of what local config CAN do under policy.
+
+---
+
 ## [4.1.1] — Detect cloud-managed Codex requirements
 
 Surfaces restrictions imposed by enterprise / managed-account Codex

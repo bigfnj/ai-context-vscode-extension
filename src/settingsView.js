@@ -268,7 +268,7 @@ class SettingsViewProvider {
             }
             case 'setCodexSandboxMode': {
                 if (!active) break;
-                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever, probeCloudRequirements } = require('./permissions');
+                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicy, deriveApprovalPolicyForSandboxModes, probeCloudRequirements } = require('./permissions');
                 const { listContexts, loadContext } = require('./context');
                 const ctx = loadContext(dir, active);
                 const validModes = new Set(['workspace-write', 'danger-full-access']);
@@ -322,12 +322,14 @@ class SettingsViewProvider {
                     },
                 });
 
-                // Approval policy is only flipped to "never" when at least one
-                // context is in danger-full-access. workspace-write leaves it alone.
-                const anyDanger = listContexts(dir)
-                    .map(n => loadContext(dir, n))
-                    .some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
-                setCodexApprovalPolicyNever(anyDanger);
+                // Re-derive the global approval_policy from the union of
+                // sandbox modes, falling back to "untrusted" when cloud
+                // requirements forbid "never".
+                const ctxs1 = listContexts(dir).map(n => loadContext(dir, n));
+                setCodexApprovalPolicy(deriveApprovalPolicyForSandboxModes({
+                    anyDanger:  ctxs1.some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access'),
+                    anyWsWrite: ctxs1.some(c => c && c.perms && c.perms.codexSandboxMode === 'workspace-write'),
+                }));
 
                 if (newMode && this._actions.probeCodex) {
                     this._actions.probeCodex().then(probe => {
@@ -367,7 +369,7 @@ class SettingsViewProvider {
             }
             case 'setCodexRecommended': {
                 if (!active) break;
-                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever } = require('./permissions');
+                const { applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicy, deriveApprovalPolicyForSandboxModes } = require('./permissions');
                 const { listContexts, loadContext } = require('./context');
                 const ctx = loadContext(dir, active);
                 const m = applyCodexSandboxMode(ctx.root, 'workspace-write');
@@ -381,10 +383,11 @@ class SettingsViewProvider {
                     ...ctx,
                     perms: { ...ctx.perms, codexSandboxMode: 'workspace-write', codexNetworkAccess: false },
                 });
-                const anyDanger = listContexts(dir)
-                    .map(n => loadContext(dir, n))
-                    .some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
-                setCodexApprovalPolicyNever(anyDanger);
+                const ctxs2 = listContexts(dir).map(n => loadContext(dir, n));
+                setCodexApprovalPolicy(deriveApprovalPolicyForSandboxModes({
+                    anyDanger:  ctxs2.some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access'),
+                    anyWsWrite: ctxs2.some(c => c && c.perms && c.perms.codexSandboxMode === 'workspace-write'),
+                }));
                 this.refresh();
                 break;
             }

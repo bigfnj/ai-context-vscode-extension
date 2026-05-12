@@ -726,6 +726,106 @@ function testProbeCloudRequirements() {
     }
 }
 
+function testDeriveApprovalPolicyForSandboxModes() {
+    // Swap HOME so we can stage cloud-requirements caches independently.
+    const origHome = process.env.HOME;
+    const home = tmpDir();
+    process.env.HOME = home;
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+    const cachePath = path.join(home, '.codex', 'cloud-requirements-cache.json');
+    const fut = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    const writeCache = (sandboxAllowed, approvalAllowed) => fs.writeFileSync(cachePath, JSON.stringify({
+        signed_payload: {
+            expires_at: fut,
+            contents: `allowed_sandbox_modes = [${sandboxAllowed.map(s => `"${s}"`).join(', ')}]\n` +
+                      `allowed_approval_policies = [${approvalAllowed.map(s => `"${s}"`).join(', ')}]\n`,
+        },
+    }), 'utf-8');
+
+    try {
+        // Personal / unmanaged install: no cache → all-off returns null, danger returns 'never'
+        if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: false, anyWsWrite: false }),
+            null, 'all off → null (no cloud)');
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: true, anyWsWrite: false }),
+            'never', 'danger → never (no cloud)');
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: false, anyWsWrite: true }),
+            null, 'workspace-write → null (no cloud — leave policy alone)');
+
+        // Managed: cloud allows untrusted, forbids never. Danger AND workspace-write
+        // both upgrade to 'untrusted'.
+        writeCache(['read-only', 'workspace-write'], ['on-request', 'untrusted']);
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: true, anyWsWrite: false }),
+            'untrusted', 'danger under cloud → untrusted fallback');
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: false, anyWsWrite: true }),
+            'untrusted', 'workspace-write under cloud → untrusted (QoL upgrade)');
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: false, anyWsWrite: false }),
+            null, 'all off under cloud → null');
+
+        // Managed: cloud allows neither (worst-case)
+        writeCache(['read-only'], ['on-request']);
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: true, anyWsWrite: false }),
+            null, 'danger when cloud allows neither → null (no managed line written)');
+        assert.strictEqual(
+            permissions.deriveApprovalPolicyForSandboxModes({ anyDanger: false, anyWsWrite: true }),
+            null, 'workspace-write when cloud allows neither → null');
+    } finally {
+        if (origHome === undefined) delete process.env.HOME;
+        else process.env.HOME = origHome;
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+}
+
+function testSetCodexApprovalPolicy() {
+    const origHome = process.env.HOME;
+    const home = tmpDir();
+    process.env.HOME = home;
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+    const cfg = path.join(home, '.codex', 'config.toml');
+    try {
+        // null on empty file is a no-op
+        permissions.setCodexApprovalPolicy(null);
+        assert.ok(!fs.existsSync(cfg) || !fs.readFileSync(cfg, 'utf-8').includes('approval_policy'),
+            'null on empty config writes nothing');
+
+        // Write 'untrusted'
+        permissions.setCodexApprovalPolicy('untrusted');
+        assert.ok(fs.readFileSync(cfg, 'utf-8').includes('approval_policy = "untrusted"'), 'untrusted line present');
+
+        // Overwrite with 'never'
+        permissions.setCodexApprovalPolicy('never');
+        const after1 = fs.readFileSync(cfg, 'utf-8');
+        assert.ok(after1.includes('approval_policy = "never"'), 'never line present');
+        assert.ok(!after1.includes('approval_policy = "untrusted"'), 'old untrusted line replaced');
+        assert.strictEqual(after1.split('approval_policy').length - 1, 1, 'exactly one approval_policy line');
+
+        // null removes our managed line
+        permissions.setCodexApprovalPolicy(null);
+        assert.ok(!fs.readFileSync(cfg, 'utf-8').includes('approval_policy'), 'managed line removed');
+
+        // null leaves a user-set non-managed value alone
+        fs.writeFileSync(cfg, 'approval_policy = "on-request"\n', 'utf-8');
+        permissions.setCodexApprovalPolicy(null);
+        assert.ok(fs.readFileSync(cfg, 'utf-8').includes('approval_policy = "on-request"'),
+            'user-set on-request preserved');
+
+        // Invalid value rejected
+        const r = permissions.setCodexApprovalPolicy('bogus');
+        assert.strictEqual(r.ok, false, 'invalid value rejected');
+    } finally {
+        if (origHome === undefined) delete process.env.HOME;
+        else process.env.HOME = origHome;
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+}
+
 function testContextNormalizeSandboxFields() {
     const dir = tmpDir();
     // Legacy boolean field is intentionally NOT migrated — fields are removed
@@ -766,6 +866,8 @@ testApplyCodexSandboxMode();
 testApplyCodexSandboxNetworkAccess();
 testProbeSandboxRuntime();
 testProbeCloudRequirements();
+testDeriveApprovalPolicyForSandboxModes();
+testSetCodexApprovalPolicy();
 testContextNormalizeSandboxFields();
 
 console.log('unit tests passed');

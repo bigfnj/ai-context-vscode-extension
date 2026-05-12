@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 const aiu = require('./aiu');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSandboxNetworkAccess, setCodexApprovalPolicyNever, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSandboxNetworkAccess, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
 
 const {
     getCtxDir,
@@ -123,14 +123,27 @@ function getMaxSecondaries() {
 }
 
 // Re-derive the global Codex approval_policy line from the union of all
-// contexts' codexSandboxMode values. Only `danger-full-access` flips the
-// global policy to "never"; `workspace-write` is approval-friendly by design
-// and intentionally leaves the policy alone.
+// contexts' codexSandboxMode values, then pick the strongest cloud-allowed
+// value:
+//   - any context in danger-full-access  → prefer "never"; fall back to
+//                                          "untrusted" when cloud forbids "never".
+//   - any context in workspace-write under an active cloud cap → "untrusted"
+//                                          (so the captured wildcards in
+//                                          ~/.codex/rules/default.rules actually
+//                                          skip prompts for non-cloud-blocked
+//                                          commands; the cloud would downgrade
+//                                          "never" to "on-request" anyway).
+//   - workspace-write on a personal/unmanaged install → leave the line alone
+//                                          (matches the v4.1.0 contract: only
+//                                          danger-full-access touches global
+//                                          policy on personal accounts).
+//   - all contexts off → remove the line if we wrote it.
 function syncCodexApprovalPolicyToSandbox(dir) {
-    const anyDanger = listContexts(dir)
-        .map(n => loadContext(dir, n))
-        .some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
-    setCodexApprovalPolicyNever(anyDanger);
+    const { setCodexApprovalPolicy, deriveApprovalPolicyForSandboxModes } = require('./permissions');
+    const ctxs = listContexts(dir).map(n => loadContext(dir, n));
+    const anyDanger  = ctxs.some(c => c && c.perms && c.perms.codexSandboxMode === 'danger-full-access');
+    const anyWsWrite = ctxs.some(c => c && c.perms && c.perms.codexSandboxMode === 'workspace-write');
+    setCodexApprovalPolicy(deriveApprovalPolicyForSandboxModes({ anyDanger, anyWsWrite }));
 }
 
 function autoPromoteEnabled() {

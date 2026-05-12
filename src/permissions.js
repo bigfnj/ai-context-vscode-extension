@@ -429,7 +429,21 @@ function removeCodexGranularSection(content) {
 // rejects it ("granular is not a unit variant") and silently falls back to
 // "on-request", which would override the scalar approval_policy we just wrote.
 // Comments (#) and the rest of the file are left alone.
-function setCodexApprovalPolicyNever(enabled) {
+// Writes the global ~/.codex/config.toml `approval_policy` scalar.
+//   value === 'never'      → maximum automation (rejected by managed-account cloud reqs)
+//   value === 'untrusted'  → skip prompts for trusted projects + matched local rules
+//                            (the strongest setting that managed accounts accept)
+//   value === null         → remove the line, but ONLY if we wrote it (i.e. the current
+//                            value is one of our two managed values). Manually-set
+//                            policies like "on-request" are left untouched.
+// Legacy boolean form `setCodexApprovalPolicyNever(true|false)` is preserved as a
+// thin wrapper for backwards compatibility within the codebase.
+const MANAGED_APPROVAL_VALUES = new Set(['never', 'untrusted']);
+
+function setCodexApprovalPolicy(value) {
+    if (value !== null && !MANAGED_APPROVAL_VALUES.has(value)) {
+        return { ok: false, error: `invalid approval_policy value: ${value}` };
+    }
     const content = readCodexConfig();
     const lines = content ? content.split('\n') : [];
 
@@ -445,18 +459,43 @@ function setCodexApprovalPolicyNever(enabled) {
         if (/^approval_policy\s*=/.test(trimmed)) { policyIdx = i; break; }
     }
 
-    if (enabled) {
-        const newLine = 'approval_policy = "never"';
+    if (value) {
+        const newLine = `approval_policy = "${value}"`;
         if (policyIdx !== -1) lines[policyIdx] = newLine;
         else lines.splice(firstSectionIdx, 0, newLine);
-    } else if (policyIdx !== -1 && /=\s*"never"/.test(lines[policyIdx])) {
-        // Only remove if WE wrote it (i.e., it's "never"). Respect any other
-        // value the user may have set manually.
-        lines.splice(policyIdx, 1);
+    } else if (policyIdx !== -1) {
+        const m = lines[policyIdx].match(/=\s*"([^"]*)"/);
+        const current = m ? m[1] : null;
+        if (current && MANAGED_APPROVAL_VALUES.has(current)) {
+            lines.splice(policyIdx, 1);
+        }
+        // else: leave user-set policy alone
     }
 
     const stripped = removeCodexGranularSection(lines.join('\n'));
     writeCodexConfig(stripped);
+    return { ok: true };
+}
+
+function setCodexApprovalPolicyNever(enabled) {
+    setCodexApprovalPolicy(enabled ? 'never' : null);
+}
+
+// Picks the strongest approval_policy value compatible with active cloud
+// requirements, given the union of per-context sandbox modes. Returns
+// 'never' | 'untrusted' | null (null means: clear our managed policy line).
+// See syncCodexApprovalPolicyToSandbox in extension.js for the contract.
+function deriveApprovalPolicyForSandboxModes({ anyDanger, anyWsWrite }) {
+    const cr = probeCloudRequirements();
+    const cloudActive = !!(cr && cr.active && !cr.expired);
+    const allows = (val) => !cloudActive || (Array.isArray(cr.approvalAllowed) && cr.approvalAllowed.includes(val));
+    if (anyDanger) {
+        if (allows('never'))     return 'never';
+        if (allows('untrusted')) return 'untrusted';
+        return null;
+    }
+    if (anyWsWrite && cloudActive && allows('untrusted')) return 'untrusted';
+    return null;
 }
 
 // ── Removal command detection ─────────────────────────────────────────────────
@@ -1223,7 +1262,9 @@ module.exports = {
     probeSandboxRuntime,
     probeCloudRequirements,
     setCodexGlobalApprovalPolicy,
+    setCodexApprovalPolicy,
     setCodexApprovalPolicyNever,
+    deriveApprovalPolicyForSandboxModes,
     setCodexBashAlias,
     updateCodexGranularConfig,
     removeCodexGranularSection,
