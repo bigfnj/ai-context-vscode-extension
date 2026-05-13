@@ -388,6 +388,86 @@ function testContextUpdateParsing() {
     assert.strictEqual(claude.stripContextUpdate(response), 'content');
 }
 
+// The injected instruction must steer the agent toward the .json.update sidecar
+// and explicitly forbid echoing CTX_UPDATE into chat. The plain wall-of-JSON
+// leak that this guards against showed up in user-visible Claude Code surfaces
+// because nothing strips it from the IDE chat view.
+function testInjectionForbidsInlineCtxUpdate() {
+    const single = inject.buildInjectionBlock(
+        { v: 3, p: 'Demo', root: '/tmp/Demo' },
+        '/tmp/.ai-context/Demo.json',
+    );
+    assert.ok(single.includes('Do NOT include'),
+        'single-context block must explicitly forbid inline CTX_UPDATE');
+    assert.ok(single.includes('.update'),
+        'single-context block must still tell the agent where the sidecar lives');
+
+    const multi = inject.buildMultiInjectionBlock(
+        [
+            { v: 3, p: 'Demo',  root: '/tmp/Demo'  },
+            { v: 3, p: 'Other', root: '/tmp/Other' },
+        ],
+        { Demo: '/tmp/.ai-context/Demo.json', Other: '/tmp/.ai-context/Other.json' },
+    );
+    assert.ok(multi.includes('Do NOT include'),
+        'multi-context block must also forbid inline CTX_UPDATE');
+}
+
+// Belt-and-suspenders: if an agent ever wrote CTX_UPDATE into the agent file
+// itself (CLAUDE.md / AGENTS.md) instead of the sidecar, the next injectIntoFile
+// must remove those leaked lines from regions OUTSIDE our marker block while
+// leaving the literal `CTX_UPDATE:{...}` template inside the marker untouched.
+function testScrubLeakedContextUpdatesOutsideMarker() {
+    const dir = tmpDir();
+    const agentFile = path.join(dir, 'CLAUDE.md');
+
+    const original = [
+        'Pre-existing user notes.',
+        'CTX_UPDATE:{"v":3,"p":"Leaked","t":"should-be-stripped"}',
+        '',
+        inject.INJECT_START,
+        'AI_CONTEXT={"v":3,"p":"Demo"}',
+        'After each response, write a single line `CTX_UPDATE:{"v":3,...}` to ...update — preserved inside block.',
+        inject.INJECT_END,
+        '',
+        'Trailing notes.',
+        'CTX_UPDATE:{"v":3,"p":"AlsoLeaked"}',
+        '',
+    ].join('\n');
+    fs.writeFileSync(agentFile, original);
+
+    const cleaned = inject.scrubLeakedContextUpdates(original);
+    assert.ok(!cleaned.includes('"Leaked"'),
+        'leak before the marker block must be stripped');
+    assert.ok(!cleaned.includes('"AlsoLeaked"'),
+        'leak after the marker block must be stripped');
+    assert.ok(cleaned.includes('preserved inside block'),
+        'instruction text inside the marker block must be preserved');
+    assert.ok(cleaned.includes('Pre-existing user notes.'),
+        'non-CTX_UPDATE content outside the block must survive');
+
+    // injectIntoFile must apply the scrub before writing the refreshed block.
+    inject.injectIntoFile(agentFile, 'AI_CONTEXT={"v":3,"p":"Demo"}\nrefreshed-instruction');
+    const after = fs.readFileSync(agentFile, 'utf8');
+    assert.ok(!after.includes('"Leaked"'),    'injectIntoFile should scrub leaks before re-injecting');
+    assert.ok(!after.includes('"AlsoLeaked"'), 'injectIntoFile should scrub trailing leaks too');
+    assert.ok(after.includes('refreshed-instruction'),
+        'refreshed block content must be written');
+}
+
+// Without an existing marker block the scrub still removes leaked CTX_UPDATE
+// lines from the whole file.
+function testScrubLeakedContextUpdatesWithoutMarker() {
+    const input = [
+        'first line',
+        'CTX_UPDATE:{"leak":1}',
+        '   CTX_UPDATE:{"indented-leak":2}',
+        'last line',
+    ].join('\n');
+    const cleaned = inject.scrubLeakedContextUpdates(input);
+    assert.strictEqual(cleaned, 'first line\nlast line');
+}
+
 testContextMemoryNormalization();
 testHistoryCap();
 testCompactInjectionProjection();
@@ -404,6 +484,9 @@ testCodexKiloTargetsDeduplicate();
 testAutoInjectWritesNestedCodexTargets();
 testGitignoreUsesNestedGitRoot();
 testContextUpdateParsing();
+testInjectionForbidsInlineCtxUpdate();
+testScrubLeakedContextUpdatesOutsideMarker();
+testScrubLeakedContextUpdatesWithoutMarker();
 
 // Verifies that normalizeContext accepts the old mem:{b,d,c,f} format produced
 // by the previous injection schema and promotes it to top-level fields.

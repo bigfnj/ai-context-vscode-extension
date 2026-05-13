@@ -156,6 +156,7 @@ function buildInjectionBlock(ctx, storePath) {
     ];
     if (storePath) {
         lines.push(`After each response, write a single line \`CTX_UPDATE:{"v":3,"p":"...","root":"...","t":"...","i":"...","n":"...","s":{},"b":[],"d":[],"c":[],"f":[],"h":[],"a":[],"e":null}\` to ${storePath}.update — the VS Code extension reads, merges, and deletes it to persist state after every turn.`);
+        lines.push(`Deliver CTX_UPDATE by writing that file via your file-write tool. Do NOT include the \`CTX_UPDATE:\` line anywhere in your visible chat reply — only the sidecar file is consumed by the extension; chat output is not parsed and shows the raw JSON to the user.`);
     }
     return lines.join('\n');
 }
@@ -188,6 +189,9 @@ function buildMultiInjectionBlock(contexts, storePathsByName) {
     }
     lines.push(
         `The extension reads the .update sidecar, merges into the matching ${AGENT_CONTEXT_NAME} store, and deletes the sidecar. Omit CTX_UPDATE for any context that did not change.`
+    );
+    lines.push(
+        `Deliver each CTX_UPDATE by writing the routed .update file via your file-write tool. Do NOT include any \`CTX_UPDATE:\` line in your visible chat reply — only the sidecar file is consumed by the extension; chat output is not parsed and shows the raw JSON to the user.`
     );
     return lines.join('\n');
 }
@@ -224,7 +228,34 @@ function injectMarkedBlock(filePath, blockContent, startMarker, endMarker) {
     return true;
 }
 
+// Strips stray `CTX_UPDATE:` lines that leaked into the agent file outside our
+// AI_CTX marker block. Agents are supposed to write CTX_UPDATE to a sidecar
+// (.json.update) consumed by our file watcher; if a turn instead echoes the
+// line into CLAUDE.md / AGENTS.md it would accumulate forever. The instruction
+// text INSIDE the marker block is preserved because it contains the literal
+// `CTX_UPDATE:{...}` template the agent has to read.
+function scrubLeakedContextUpdates(content) {
+    const stripLines = (s) => s
+        .split('\n')
+        .filter(l => !l.trim().startsWith('CTX_UPDATE:'))
+        .join('\n');
+
+    const range = findMarkedRange(content, INJECT_START, INJECT_END);
+    if (!range) return stripLines(content);
+
+    return stripLines(content.slice(0, range.start))
+        + content.slice(range.start, range.end)
+        + stripLines(content.slice(range.end));
+}
+
 function injectIntoFile(filePath, blockContent) {
+    // Defensive: clean leaked CTX_UPDATE lines first so the next user-visible
+    // injection isn't surrounded by stale JSON dumps.
+    if (fs.existsSync(filePath)) {
+        const existing = fs.readFileSync(filePath, 'utf8');
+        const cleaned  = scrubLeakedContextUpdates(existing);
+        if (cleaned !== existing) fs.writeFileSync(filePath, cleaned);
+    }
     injectMarkedBlock(filePath, blockContent, INJECT_START, INJECT_END);
 }
 
@@ -462,6 +493,7 @@ module.exports = {
     clearInjection,
     injectMarkedBlock,
     clearMarkedBlock,
+    scrubLeakedContextUpdates,
     getCodexBootstrapTarget,
     getCodexBootstrapTargets,
     autoInjectCodexBootstrap,

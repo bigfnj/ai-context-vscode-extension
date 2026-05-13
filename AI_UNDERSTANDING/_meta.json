@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "project": "ai-context-runner",
-  "last_audit_commit": "54be1a9",
-  "last_audit_at": "2026-05-07T20:00:52Z",
-  "generator": "ai-context-runner/3.12.0",
+  "last_audit_commit": "075bdf8",
+  "last_audit_at": "2026-05-13T06:40:43Z",
+  "generator": "ai-context-runner/4.2.0",
   "overview": "Single-window VS Code extension. Two related but independent capabilities: (1) AI Context Runner — auto-injects per-project AI_CONTEXT JSON into agent files (CLAUDE.md / AGENTS.md / .cursorrules / etc.), captures permission grants from ~/.claude and ~/.codex, syncs Codex trust + sandbox modes; (2) AI Understanding — git-tracked, machine-edited model of the codebase under AI_UNDERSTANDING/ with sha1-based staleness, validator, sweep injection into agent files, and an opt-in pre-commit hook (block-narrow mode). Schema spec: AI_UNDERSTANDING_FORMAT.md.",
   "frameworks": [
     {

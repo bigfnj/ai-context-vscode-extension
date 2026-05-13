@@ -5,6 +5,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.2.0] — stop CTX_UPDATE from leaking into interactive chat surfaces
+
+The `ai.runTask` CLI path has always stripped `CTX_UPDATE:` from the rendered
+response via `stripContextUpdate`, but the AI Context Runner injection block
+is also read by interactive agents whose chat output the extension cannot
+proxy (Claude Code, Codex in IDE, etc.). When such an agent echoed the
+`CTX_UPDATE:` line into the visible reply, the user saw the raw JSON wall.
+This release closes that gap on two fronts: the prompt now explicitly forbids
+inline emission, and the agent file is defensively scrubbed before every
+re-inject.
+
+### Changed
+
+- `buildInjectionBlock` and `buildMultiInjectionBlock` (inject.js) now
+  append an explicit *"Do NOT include the `CTX_UPDATE:` line anywhere in
+  your visible chat reply — only the sidecar file is consumed by the
+  extension; chat output is not parsed and shows the raw JSON to the
+  user."* directive. Both single-context and multi-context variants get
+  the wording. Existing injection blocks refresh on next context
+  activation or workspace open.
+
+### Added
+
+- `scrubLeakedContextUpdates(content)` in `inject.js` — strips stray
+  `CTX_UPDATE:` lines from regions outside the `<!-- AI_CTX_START -->` /
+  `AI_CTX_END` marker pair. Content inside the marker block is preserved
+  unchanged because the injected instruction itself embeds the literal
+  `CTX_UPDATE:{"v":3,…}` template the agent must read.
+- `injectIntoFile` now calls `scrubLeakedContextUpdates` on the existing
+  file content before re-injecting the marker block, so any leaked
+  `CTX_UPDATE:` line that landed in `CLAUDE.md` / `AGENTS.md` /
+  `.cursorrules` / etc. gets cleaned on the next sweep instead of
+  accumulating.
+
+### Tests
+
+- `testInjectionForbidsInlineCtxUpdate` pins the "Do NOT include" wording
+  in both injection variants.
+- `testScrubLeakedContextUpdatesOutsideMarker` verifies leaks before and
+  after the marker block are stripped, the template inside the block is
+  preserved, and `injectIntoFile` applies the scrub end-to-end.
+- `testScrubLeakedContextUpdatesWithoutMarker` covers the marker-less
+  case including indented leaks.
+
+---
+
 ## [4.1.2] — `approval_policy = "untrusted"` fallback under cloud cap
 
 Stops fighting the silent downgrade. On managed-account installs where the
