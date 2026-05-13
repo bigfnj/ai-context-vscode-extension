@@ -5,6 +5,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.3.0] — drop cloud-shadowed entries from Codex safe-list auto-derive
+
+When a workspace runs under cloud-managed Codex requirements (Business /
+Enterprise plans with a `cloud-requirements-cache.json`), the cloud's
+`[[rules.prefix_rules]]` blocks force an approval prompt on a fixed
+set of argv[0] tokens (shells, runtimes, package managers, network
+tools, etc.). The rule engine takes the max over matches and Prompt
+beats Allow, so any local `prefix_rule(... decision="allow")` whose
+first token sits in that set is dead weight — it gets written to
+`~/.codex/rules/default.rules` but the cloud rule fires anyway. This
+release teaches the extension to detect those entries up front and
+skip them, while leaving Claude's permission store untouched.
+
+### Added
+
+- `extractCloudShadowedFirstTokens(toml)` in `permissions.js` — mines the
+  cache TOML for `[[rules.prefix_rules]]` blocks with `decision = "prompt"`
+  or `"forbidden"` and collects the first-token names from each block's
+  `pattern = [{ any_of = […] }]` or `pattern = [{ token = "…" }]`.
+- `getCloudShadowedFirstTokens()` — public helper returning the Set or
+  `null` (cache missing, expired, or no shadowing blocks). Exported.
+- `countCloudShadowedAllow(allow, shadowed)` — counts how many entries
+  in a Claude `perms.allow` array would be filtered by the active
+  shadow set. Used by the settings panel for the warning banner.
+- `probeCloudRequirements()` now also returns `shadowedFirstTokens` so
+  callers don't have to parse twice.
+- Settings panel cloud-requirements banner now renders a `cb-shadow`
+  line: *"N entries in this context's trusted list are shadowed by
+  cloud rules — not written to Codex (would no-op anyway)"* when the
+  count is non-zero.
+
+### Changed
+
+- `claudeAllowToCodexRules(allow, shadowedFirstTokens?)` accepts an
+  optional shadow set and skips entries whose argv[0] is in it.
+- `deriveSafeCommandsFromAllow(allowList, shadowedFirstTokens?)` —
+  same filter contract.
+- Both call sites in `extension.js` (`injectAndApplyPerms` +
+  the Codex rollout harvester) now probe shadowed tokens once and
+  pass the Set through.
+
+### Unchanged on purpose
+
+- `applyClaudePerms` always receives the full unfiltered `allow` set
+  — Claude's permission store is not affected by the Codex cap.
+- Per-context `ctx.perms.allow` stored in `~/.ai-context/*.json` keeps
+  the full intent so an account / cap change replays correctly.
+- Copilot and Kilo do not have permission-store integrations in this
+  extension; only the AI_CONTEXT block injection touches them.
+
+### Tests
+
+- `testCloudShadowedFiltering` (new) covers `any_of`, literal
+  `token = "…"`, and `forbidden` patterns; exact-token semantics
+  (`pip3` is NOT shadowed by cloud's `pip`); null-shadow legacy mode;
+  expired-cache → null fallthrough.
+- `testProbeCloudRequirements` extended to assert the new
+  `shadowedFirstTokens` field on the returned object.
+
+---
+
 ## [4.2.0] — stop CTX_UPDATE from leaking into interactive chat surfaces
 
 The `ai.runTask` CLI path has always stripped `CTX_UPDATE:` from the rendered

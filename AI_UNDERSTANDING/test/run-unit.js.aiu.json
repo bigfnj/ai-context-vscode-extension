@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "test/run-unit.js",
-  "sha1": "395c6ffa1e2e06c35fc0bccc94fb131285ffcd71",
+  "sha1": "5fe287de9eceaaf155f7c876dd9da86bbe88dcbe",
   "purpose": "Original unit test suite for the core extension (context, inject, claude, extension, permissions modules). Stubs the `vscode` module via Module._load before requires so tests run in plain Node without a VS Code host.",
   "exports": [],
   "imports": [

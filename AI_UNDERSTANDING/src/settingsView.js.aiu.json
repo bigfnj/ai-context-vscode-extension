@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "path": "src/settingsView.js",
-  "sha1": "da98ae2c25d62f2ad825c1686a54f651f43c7457",
-  "purpose": "Sidebar webview provider for the AI Context Runner panel. Renders sections (Active Context, Projects, Templates, AI Understanding, Codex Settings, Behaviour, Permissions, About), pushes state into the webview via postMessage, and dispatches button events back to extension commands.",
+  "sha1": "e5add7fd34d58293c966904b05cde1e0a273c925",
+  "purpose": "Sidebar webview provider for the AI Context Runner panel. Renders sections (Active Context, Projects, Templates, AI Understanding, Codex Settings, Behaviour, Permissions, About), pushes state into the webview via postMessage, and dispatches button events back to extension commands. The cloud-managed Codex banner reports both the count of cloud prompt-rule groups (prefixRulesPromptCount) AND the number of active-context allow entries shadowed by them (shadowedAllowCount) so the user knows when local trusted entries are dead weight.",
   "exports": [
     "SettingsViewProvider"
   ],

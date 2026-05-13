@@ -661,14 +661,23 @@ function applyCodexSafeCommands(storedCommands) {
 
 // Derives Codex safeCommand prefixes from a Claude-style allow list.
 // Bash(git *) → "git",  Bash(du -sh) → "du -sh",  Bash(*) → skipped.
-function deriveSafeCommandsFromAllow(allowList) {
+// Pass a Set of cloud-shadowed first tokens (from getCloudShadowedFirstTokens)
+// to drop any entry whose argv[0] would be force-prompted by the cloud rule
+// engine anyway — those safeCommands are no-ops at runtime and just bloat
+// the Codex config.
+function deriveSafeCommandsFromAllow(allowList, shadowedFirstTokens = null) {
     if (!Array.isArray(allowList)) return [];
     const results = [];
     for (const perm of allowList) {
         const m = perm.match(/^Bash\((.+)\)$/);
         if (!m) continue;
         const cmd = m[1].replace(/\s*\*$/, '').trim();
-        if (cmd) results.push(cmd);
+        if (!cmd) continue;
+        if (shadowedFirstTokens && shadowedFirstTokens.size > 0) {
+            const first = cmd.split(/\s+/)[0];
+            if (shadowedFirstTokens.has(first)) continue;
+        }
+        results.push(cmd);
     }
     return [...new Set(results)];
 }
@@ -917,9 +926,77 @@ function probeCloudRequirements() {
         approvalAllowed:  extractList('allowed_approval_policies'),
         webSearchAllowed: extractList('allowed_web_search_modes'),
         prefixRulesPromptCount: (toml.match(/decision\s*=\s*"prompt"/g) || []).length,
+        shadowedFirstTokens: extractCloudShadowedFirstTokens(toml),
         accountId: payload.account_id || null,
         source: 'cloud-requirements-cache.json',
     };
+}
+
+// Walk the cloud-requirements TOML for `[[rules.prefix_rules]]` blocks whose
+// decision is "prompt" or "forbidden" and collect the first-token values from
+// each `pattern = [{ token = "..." }]` or `pattern = [{ any_of = [...] }]`.
+// These tokens cannot be downgraded to "allow" by local rules — the rule
+// engine takes the max over matches and Prompt/Forbidden > Allow. Any local
+// allow whose first token sits in this set is dead weight: it gets written
+// to default.rules but the cloud rule fires anyway. Returns null when no
+// cache is present, the cache has expired, or no shadowing tokens parse out.
+function extractCloudShadowedFirstTokens(toml) {
+    if (typeof toml !== 'string' || !toml) return null;
+    const tokens = new Set();
+    // Split on `[[rules.prefix_rules]]` header; skip the leading prologue.
+    const blocks = toml.split(/^\s*\[\[rules\.prefix_rules\]\]\s*$/m).slice(1);
+    for (const raw of blocks) {
+        // A block ends at the next TOML table header (`[...`). Take only
+        // body lines before that to avoid bleeding into adjacent sections.
+        const body = raw.split(/^\s*\[(?!\[)/m)[0].split(/^\s*\[\[/m)[0];
+        if (!/decision\s*=\s*"(prompt|forbidden)"/i.test(body)) continue;
+        // Pattern shapes the engine accepts:
+        //   pattern = [{ token = "foo" }]
+        //   pattern = [{ any_of = ["a", "b", ...] }]
+        // We only mine the FIRST pattern element because cloud blocks the
+        // command's argv[0]; later tokens are positional refinements.
+        const patternMatch = body.match(/pattern\s*=\s*\[\s*\{([^}]*)\}/);
+        if (!patternMatch) continue;
+        const inner = patternMatch[1];
+        const anyOf = inner.match(/any_of\s*=\s*\[([^\]]+)\]/);
+        if (anyOf) {
+            for (const item of anyOf[1].split(',')) {
+                const t = item.trim().replace(/^["']|["']$/g, '');
+                if (t) tokens.add(t);
+            }
+            continue;
+        }
+        const literal = inner.match(/token\s*=\s*"([^"]+)"/);
+        if (literal) tokens.add(literal[1]);
+    }
+    return tokens.size > 0 ? tokens : null;
+}
+
+// Convenience wrapper around probeCloudRequirements for callers that only
+// need the shadowed-token set (rule-derivation paths). Returns null when
+// the cache is missing, expired, or has no prompt/forbidden prefix rules.
+function getCloudShadowedFirstTokens() {
+    const cr = probeCloudRequirements();
+    if (!cr || cr.expired) return null;
+    return cr.shadowedFirstTokens || null;
+}
+
+// Counts how many entries in a Claude perms.allow array would be filtered
+// out by the active cloud-shadowed token set. Used by the settings panel
+// to warn the user when their local trusted list contains dead weight.
+function countCloudShadowedAllow(allow, shadowedFirstTokens) {
+    if (!Array.isArray(allow) || !shadowedFirstTokens || shadowedFirstTokens.size === 0) return 0;
+    let n = 0;
+    for (const raw of allow) {
+        if (typeof raw !== 'string') continue;
+        const m = raw.match(/^Bash\((.+)\)$/);
+        if (!m) continue;
+        const inner = m[1].trim().replace(/\s*\*\s*$/, '').trim();
+        if (!inner) continue;
+        const first = inner.split(/\s+/)[0];
+        if (shadowedFirstTokens.has(first)) n++;
+    }
+    return n;
 }
 
 // ── Codex rollout JSONL parsing ─────────────────────────────────────────────
@@ -1036,7 +1113,10 @@ function codexRulesToClaudeAllow(rules) {
 //   - Tokens containing shell metacharacters Codex won't evaluate
 //     (per docs: redirections, substitutions, env vars, wildcards inside
 //     a token, etc. — these commands skip rule matching at runtime anyway)
-function claudeAllowToCodexRules(allow) {
+// Same shadow-filter contract as deriveSafeCommandsFromAllow — entries whose
+// argv[0] sits in an active cloud prompt/forbidden rule are skipped, because
+// the engine takes the max over matches and Allow loses to Prompt/Forbidden.
+function claudeAllowToCodexRules(allow, shadowedFirstTokens = null) {
     if (!Array.isArray(allow)) return [];
     const out = [];
     for (const raw of allow) {
@@ -1051,6 +1131,7 @@ function claudeAllowToCodexRules(allow) {
         if (tokens.length === 0) continue;
         const safe = tokens.every(t => /^[A-Za-z0-9._/+@:=,-]+$/.test(t));
         if (!safe) continue;
+        if (shadowedFirstTokens && shadowedFirstTokens.size > 0 && shadowedFirstTokens.has(tokens[0])) continue;
         out.push({ pattern: tokens, decision: 'allow' });
     }
     return out;
@@ -1261,6 +1342,8 @@ module.exports = {
     applyCodexSandboxNetworkAccess,
     probeSandboxRuntime,
     probeCloudRequirements,
+    getCloudShadowedFirstTokens,
+    countCloudShadowedAllow,
     setCodexGlobalApprovalPolicy,
     setCodexApprovalPolicy,
     setCodexApprovalPolicyNever,

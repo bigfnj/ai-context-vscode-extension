@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const { SettingsViewProvider } = require('./settingsView');
 const aiu = require('./aiu');
 
-const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSandboxNetworkAccess, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter } = require('./permissions');
+const { readClaudeSettings, captureNewClaudePerms, generalizeClaudePerm, isClaudePermCovered, applyClaudePerms, readCodexConfig, extractCodexTrust, applyCodexTrust, consolidatePermissionsToGlobal, applyCodexFullAuto, applyCodexSandboxMode, applyCodexSandboxNetworkAccess, applyCodexSafeCommands, deriveSafeCommandsFromAllow, hasRemovalCommands, purgeRemovalMemory, listRemovalCommands, removeRemovalCommandFromClaudeGlobal, removeRemovalCommandFromCodex, isRemovalCommand, readCodexRulesFile, parseCodexRules, codexRulesToClaudeAllow, claudeAllowToCodexRules, applyCodexRulesFile, extractBashCommandFromCodexExec, isRuleSafeCommand, applyRemovalFilter, getCloudShadowedFirstTokens } = require('./permissions');
 
 const {
     getCtxDir,
@@ -394,12 +394,17 @@ function injectAndApplyPerms(dir, name, wsStateRef) {
         const codexSandboxMode   = (ctx.perms.codexSandboxMode === 'workspace-write' || ctx.perms.codexSandboxMode === 'danger-full-access') ? ctx.perms.codexSandboxMode : null;
         const codexNetworkAccess = ctx.perms.codexNetworkAccess === true && codexSandboxMode === 'workspace-write';
         applyClaudePerms(allow);
-        applyCodexSafeCommands([...safeCommands, ...deriveSafeCommandsFromAllow(allow)]);
+        // Drop allow entries whose argv[0] is force-prompted by an active
+        // cloud-managed Codex policy — writing them to default.rules /
+        // safeCommands has no effect (engine takes max, Prompt > Allow) and
+        // bloats both files. Null means no active cap → no filtering.
+        const cloudShadowed = getCloudShadowedFirstTokens();
+        applyCodexSafeCommands([...safeCommands, ...deriveSafeCommandsFromAllow(allow, cloudShadowed)]);
         // Push our per-context wildcards back into ~/.codex/rules/default.rules
         // (additive merge — preserves manual edits and deny rules) so Codex
         // sessions opened in this context inherit the harvested approvals
         // without re-prompting. Symmetric with applyClaudePerms.
-        applyCodexRulesFile(claudeAllowToCodexRules(allow));
+        applyCodexRulesFile(claudeAllowToCodexRules(allow, cloudShadowed));
         applyCodexSandboxMode(ctx.root, codexSandboxMode);
         applyCodexSandboxNetworkAccess(ctx.root, codexNetworkAccess);
         syncCodexApprovalPolicyToSandbox(dir);
@@ -1907,8 +1912,10 @@ function activate(context) {
         // watchers do.
         applyClaudePerms(newPerms);
         const baseSafe = (ctx.perms && ctx.perms.safeCommands) || [];
-        applyCodexSafeCommands([...baseSafe, ...deriveSafeCommandsFromAllow(newPerms)]);
-        applyCodexRulesFile(claudeAllowToCodexRules(newPerms));
+        // Same shadow filter as injectAndApplyPerms — see comments there.
+        const cloudShadowed = getCloudShadowedFirstTokens();
+        applyCodexSafeCommands([...baseSafe, ...deriveSafeCommandsFromAllow(newPerms, cloudShadowed)]);
+        applyCodexRulesFile(claudeAllowToCodexRules(newPerms, cloudShadowed));
         settingsView.refresh();
         notify(`AI Context: harvested ${newPerms.length} command${newPerms.length !== 1 ? 's' : ''} from Codex session into [${active}]`);
     };

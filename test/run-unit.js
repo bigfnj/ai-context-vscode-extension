@@ -779,6 +779,10 @@ function testProbeCloudRequirements() {
         assert.deepStrictEqual(r1.sandboxAllowed, ['read-only', 'workspace-write'], 'sandbox list parsed');
         assert.deepStrictEqual(r1.approvalAllowed, ['on-request', 'untrusted'], 'approval list parsed');
         assert.strictEqual(r1.prefixRulesPromptCount, 2, 'prompt-rule count counts both blocks');
+        // First block has `any_of = ["python"]`, second block has no pattern, so only python is captured.
+        assert.ok(r1.shadowedFirstTokens instanceof Set, 'shadowedFirstTokens is a Set');
+        assert.ok(r1.shadowedFirstTokens.has('python'), 'python token mined from any_of');
+        assert.strictEqual(r1.shadowedFirstTokens.size, 1, 'patternless block contributes no tokens');
 
         // Expired cache
         fs.writeFileSync(cachePath, JSON.stringify({
@@ -802,6 +806,107 @@ function testProbeCloudRequirements() {
         const r3 = permissions.probeCloudRequirements();
         assert.strictEqual(r3.sandboxAllowed, null, 'missing sandbox key → null array');
         assert.strictEqual(r3.approvalAllowed, null, 'missing approval key → null array');
+    } finally {
+        if (origHome === undefined) delete process.env.HOME;
+        else process.env.HOME = origHome;
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+}
+
+function testCloudShadowedFiltering() {
+    // Mines the shadowed-first-tokens set from a representative cloud TOML
+    // (modeled on the real ~/.codex/cloud-requirements-cache.json the user runs
+    // under) and verifies that claudeAllowToCodexRules + deriveSafeCommandsFromAllow
+    // both honor it. The cache writer keeps blocks varied: any_of, a single
+    // literal token, and a forbidden decision (also shadow-eligible).
+    const origHome = process.env.HOME;
+    const home = tmpDir();
+    process.env.HOME = home;
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+    const cachePath = path.join(home, '.codex', 'cloud-requirements-cache.json');
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    const toml = [
+        'allowed_sandbox_modes = ["read-only", "workspace-write"]',
+        'allowed_approval_policies = ["on-request", "untrusted"]',
+        '[[rules.prefix_rules]]',
+        'pattern = [{ any_of = ["python", "python3", "node"] }]',
+        'decision = "prompt"',
+        '[[rules.prefix_rules]]',
+        'pattern = [{ any_of = ["npx", "npm", "pip"] }]',
+        'decision = "prompt"',
+        '[[rules.prefix_rules]]',
+        'pattern = [{ token = "kubectl" }]',
+        'decision = "forbidden"',
+        '[agents]',
+        'max_threads = 2',
+    ].join('\n');
+    fs.writeFileSync(cachePath, JSON.stringify({
+        signed_payload: { expires_at: future, account_id: 'acct-x', contents: toml },
+    }), 'utf-8');
+
+    try {
+        const shadow = permissions.getCloudShadowedFirstTokens();
+        assert.ok(shadow instanceof Set, 'getCloudShadowedFirstTokens returns a Set');
+        for (const t of ['python', 'python3', 'node', 'npx', 'npm', 'pip', 'kubectl']) {
+            assert.ok(shadow.has(t), `shadow set contains ${t}`);
+        }
+        assert.ok(!shadow.has('pip3'), 'pip3 is NOT shadowed (cloud lists pip, not pip3)');
+        assert.ok(!shadow.has('git'), 'git is NOT shadowed');
+
+        // Mixed allow list — some shadowed, some not.
+        const allow = [
+            'Bash(git status --short *)',     // keep
+            'Bash(python3 -c *)',             // drop (python3 shadowed)
+            'Bash(python3 *)',                // drop
+            'Bash(node *)',                   // drop
+            'Bash(npx markdownlint-cli2 *)',  // drop
+            'Bash(pip3 list *)',              // keep (pip3 ≠ pip)
+            'Bash(kubectl get pods *)',       // drop (forbidden also shadows)
+            'Bash(rg --files *)',             // keep
+        ];
+
+        const rules = permissions.claudeAllowToCodexRules(allow, shadow);
+        const ruleFirstTokens = rules.map(r => r.pattern[0]);
+        assert.deepStrictEqual(
+            ruleFirstTokens.sort(),
+            ['git', 'pip3', 'rg'].sort(),
+            'claudeAllowToCodexRules drops shadowed entries, keeps the rest',
+        );
+
+        const safe = permissions.deriveSafeCommandsFromAllow(allow, shadow);
+        assert.ok(!safe.some(c => c.startsWith('python')), 'derived safeCommands drops python3*');
+        assert.ok(!safe.some(c => c.startsWith('node')), 'derived safeCommands drops node*');
+        assert.ok(!safe.some(c => c.startsWith('npx')), 'derived safeCommands drops npx*');
+        assert.ok(!safe.some(c => c.startsWith('kubectl')), 'derived safeCommands drops kubectl*');
+        assert.ok(safe.includes('git status --short'), 'derived safeCommands keeps git');
+        assert.ok(safe.includes('pip3 list'), 'derived safeCommands keeps pip3 (not pip)');
+
+        // Null shadow set → no filtering (legacy behavior preserved).
+        const rulesUnfiltered = permissions.claudeAllowToCodexRules(allow, null);
+        assert.strictEqual(rulesUnfiltered.length, 8, 'null shadow set → no filter applied');
+
+        // Count helper agrees on the drop count.
+        assert.strictEqual(
+            permissions.countCloudShadowedAllow(allow, shadow),
+            5,
+            'countCloudShadowedAllow agrees: 4 runtime/pm + 1 kubectl = 5 shadowed',
+        );
+        assert.strictEqual(
+            permissions.countCloudShadowedAllow(allow, null),
+            0,
+            'null shadow set → zero shadowed count',
+        );
+
+        // Expired cache → getCloudShadowedFirstTokens returns null.
+        const past = new Date(Date.now() - 60 * 1000).toISOString();
+        fs.writeFileSync(cachePath, JSON.stringify({
+            signed_payload: { expires_at: past, contents: toml },
+        }), 'utf-8');
+        assert.strictEqual(
+            permissions.getCloudShadowedFirstTokens(),
+            null,
+            'expired cache → null shadow set',
+        );
     } finally {
         if (origHome === undefined) delete process.env.HOME;
         else process.env.HOME = origHome;
@@ -949,6 +1054,7 @@ testApplyCodexSandboxMode();
 testApplyCodexSandboxNetworkAccess();
 testProbeSandboxRuntime();
 testProbeCloudRequirements();
+testCloudShadowedFiltering();
 testDeriveApprovalPolicyForSandboxModes();
 testSetCodexApprovalPolicy();
 testContextNormalizeSandboxFields();

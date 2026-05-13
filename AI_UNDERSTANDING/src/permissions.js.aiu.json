@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "path": "src/permissions.js",
-  "sha1": "df6bbdb376ebb57c50a7bb80ebcd87b65c7f3613",
-  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, tri-state sandbox mode (workspace-write / danger-full-access / off) plus the [sandbox_workspace_write] network_access section, full-auto alias, the global approval_policy, a platform sandbox-runtime probe (bwrap on Linux/WSL2), and a cloud-managed-requirements probe that reads ~/.codex/cloud-requirements-cache.json.",
+  "sha1": "33a3b0d4b4655587051b9fecbe54d77d2c8df2f7",
+  "purpose": "Bidirectional Claude ⇄ Codex permission sync. Reads/writes ~/.claude/settings.json and ~/.codex/config.toml + ~/.codex/rules/default.rules; generalizes captured commands (e.g. `Bash(git log -5)` → `Bash(git *)`); filters destructive removal commands; manages Codex trust level, tri-state sandbox mode (workspace-write / danger-full-access / off) plus the [sandbox_workspace_write] network_access section, full-auto alias, the global approval_policy, a platform sandbox-runtime probe (bwrap on Linux/WSL2), and a cloud-managed-requirements probe that reads ~/.codex/cloud-requirements-cache.json. Includes a cloud-shadow filter (extractCloudShadowedFirstTokens + getCloudShadowedFirstTokens + countCloudShadowedAllow) so deriveSafeCommandsFromAllow and claudeAllowToCodexRules can drop allow entries whose argv[0] is force-prompted by an active cloud rule (would no-op anyway since the engine takes max over matches and Prompt > Allow).",
   "exports": [
     "readClaudeSettings",
     "writeClaudeSettings",
@@ -21,6 +21,8 @@
     "applyCodexSandboxNetworkAccess",
     "probeSandboxRuntime",
     "probeCloudRequirements",
+    "getCloudShadowedFirstTokens",
+    "countCloudShadowedAllow",
     "setCodexGlobalApprovalPolicy",
     "setCodexApprovalPolicy",
     "setCodexApprovalPolicyNever",
@@ -83,6 +85,8 @@
     "extractCodexTrust matches `[projects.\"<root>\"]` headers exactly — small whitespace differences cause it to insert a duplicate section.",
     "applyCodexSandboxMode operates on per-project .codex/config.toml — NOT the global ~/.codex/config.toml — scope confusion is a recurring bug source.",
     "probeSandboxRuntime returns ok=true on macOS and Windows unconditionally; only Linux/WSL2 actually scans PATH for bwrap. /proc/version sniff classifies wsl2 vs linux.",
-    "probeCloudRequirements parses TOML fields out of the JSON envelope's signed_payload.contents with regex (no TOML lib). Returns null for personal/unmanaged Codex installs (no cache file). expired flag is set when expires_at is in the past, but caller decides what to do — payload is not auto-discarded."
+    "probeCloudRequirements parses TOML fields out of the JSON envelope's signed_payload.contents with regex (no TOML lib). Returns null for personal/unmanaged Codex installs (no cache file). expired flag is set when expires_at is in the past, but caller decides what to do — payload is not auto-discarded.",
+    "extractCloudShadowedFirstTokens only mines the first pattern element of each [[rules.prefix_rules]] block — cloud rules block argv[0] and later positions are positional refinements. forbidden decisions are also shadowing (they too defeat a local Allow via max-of-matches). getCloudShadowedFirstTokens returns null if the cache is expired so callers don't filter against stale policy.",
+    "claudeAllowToCodexRules and deriveSafeCommandsFromAllow both accept an optional shadowedFirstTokens Set; null/missing means no filter (legacy callers unchanged)."
   ]
 }

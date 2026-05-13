@@ -187,6 +187,19 @@ class SettingsViewProvider {
             try { return require('./permissions').probeCloudRequirements(); }
             catch { return null; }
         })();
+        // Count how many entries in the active context's perms.allow are
+        // shadowed (no-op'd) by an active cloud prefix-rule. The webview can
+        // show this number to warn the user that part of their trusted list
+        // is dead weight. Serialized as a primitive so postMessage can clone it.
+        if (cloudReqs && cloudReqs.active && !cloudReqs.expired && cloudReqs.shadowedFirstTokens && perms.allow.length > 0) {
+            try {
+                const { countCloudShadowedAllow } = require('./permissions');
+                cloudReqs.shadowedAllowCount = countCloudShadowedAllow(perms.allow, cloudReqs.shadowedFirstTokens);
+            } catch { /* leave count unset */ }
+        }
+        // Set is not structured-clonable across postMessage — drop it now
+        // that we've extracted the count.
+        if (cloudReqs) delete cloudReqs.shadowedFirstTokens;
         const payload = { type: 'update', active, previous: prevData, contexts, settings, perms, removalCount, secondaries: secondariesList, version: VERSION, activeHealth, templates, aiu, sectionStates, sandboxRuntime, cloudReqs };
         for (const surface of this._surfaces) {
             if (!surface.host.visible) continue;
@@ -543,6 +556,7 @@ input:checked+.slider::before{transform:translateX(12px);opacity:1}
 .cloud-reqs-banner{background:rgba(255,160,60,.10);border:1px solid rgba(255,160,60,.40);border-radius:3px;padding:6px 8px;margin-bottom:8px;font-size:11px}
 .cb-title{font-weight:600;color:var(--vscode-editorWarning-foreground,#ffa040);margin-bottom:4px}
 .cb-detail{font-family:var(--vscode-editor-font-family,monospace);font-size:10px;color:var(--vscode-foreground);padding:1px 0}
+.cb-shadow{color:var(--vscode-editorWarning-foreground,#ffa040);font-style:italic}
 .cb-meta{font-size:9px;color:var(--vscode-descriptionForeground);margin-top:4px;font-style:italic}
 .sb-rb-blocked{opacity:.55;cursor:not-allowed}
 .sb-rb-blocked input[type=radio]{cursor:not-allowed}
@@ -698,6 +712,7 @@ function render() {
             <div class="cb-detail">sandbox_mode: \${esc((sandboxAllowed||[]).join(', ') || 'unrestricted')}</div>
             <div class="cb-detail">approval_policy: \${esc((approvalAllowed||[]).join(', ') || 'unrestricted')}</div>
             \${cloudReqs.prefixRulesPromptCount > 0 ? \`<div class="cb-detail">cloud also forces approval prompts on \${cloudReqs.prefixRulesPromptCount} command-prefix rule group(s) — shells, runtimes, network tools, package managers, etc. — that local rules cannot override</div>\` : ''}
+            \${cloudReqs.shadowedAllowCount > 0 ? \`<div class="cb-detail cb-shadow">\${cloudReqs.shadowedAllowCount} entr\${cloudReqs.shadowedAllowCount === 1 ? 'y' : 'ies'} in this context's trusted list \${cloudReqs.shadowedAllowCount === 1 ? 'is' : 'are'} shadowed by cloud rules — not written to Codex (would no-op anyway)</div>\` : ''}
             <div class="cb-meta">expires \${esc(cloudReqs.expiresAt || 'unknown')} · cached from cloud requirements</div>
         </div>
     \` : '';
