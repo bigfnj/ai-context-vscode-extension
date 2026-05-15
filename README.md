@@ -58,6 +58,10 @@ It shows:
   Codex), Codex safe commands, and an Advanced Permissions button.
 - **Behaviour** — toggles for all extension settings.
 - **Agents** — checkboxes for which AI agents receive context injection.
+- **AI Understanding** — workspace name and full path, status summary
+  (fresh / stale / untracked / orphan counts), hook install state, and
+  context-sensitive action buttons (Initialize / Show Status / Refresh /
+  Install or Uninstall Hook). See the AI Understanding section below.
 - **About** — version and projects root.
 
 ## Permissions
@@ -140,6 +144,39 @@ Some Codex VS Code extension versions ignore `config.toml` overrides for
 ([openai/codex#10540](https://github.com/openai/codex/issues/10540)). After
 toggling, verify by asking Codex to write outside the workspace — it should
 refuse or prompt according to the mode you picked.
+
+#### Cloud-managed Codex requirements
+
+On managed-account installs (Business / Enterprise plans), the cloud
+publishes a signed requirements payload cached at
+`~/.codex/cloud-requirements-cache.json` that caps `allowed_sandbox_modes`,
+`allowed_approval_policies`, and `allowed_web_search_modes`. The extension
+probes this cache at sidebar render time:
+
+- Sandbox-mode radio options outside the cloud allow set render with a
+  `⛔ blocked by policy` tag, dimmed appearance, and a tooltip explaining
+  that Codex would silently downgrade the value at runtime.
+- The settings panel surfaces a **cloud requirements banner** showing the
+  active allowed-mode set, allowed approval policies, prefix-rule prompt
+  count, and cache expiry timestamp.
+- `approval_policy` falls back to `"untrusted"` when the cloud forbids
+  `"never"` — the strongest cloud-allowed value, which still lets the
+  per-project `trust_level = "trusted"` + harvested
+  `~/.codex/rules/default.rules` wildcards skip prompts for any command
+  not covered by the cloud's mandatory `[[rules.prefix_rules]]` groups.
+- **Cloud-shadowed allow-list filtering** — when the cloud forces a
+  prompt on a fixed set of argv[0] tokens (shells, runtimes, package
+  managers, network tools), any local `prefix_rule(... decision="allow")`
+  whose first token is in that set is dead weight: it gets written to
+  `~/.codex/rules/default.rules` but the cloud rule fires anyway. The
+  extension detects those entries up front and skips them when deriving
+  Codex rules from Claude's allow list. Per-context `ctx.perms.allow`
+  still stores the full intent, so a plan / cap change replays correctly.
+  Claude's permission store is never affected by the Codex cap.
+
+Personal / unmanaged installs (no cache file) bypass all of the above —
+the radio group, approval-policy writer, and rules deriver behave as
+documented in the preceding sections.
 
 ### Codex trust level
 
@@ -264,9 +301,12 @@ take effect on reload without repackaging:
 
 ```bash
 mkdir -p ~/.vscode-server/extensions
-ln -s /path/to/ai-context-extension \
-      ~/.vscode-server/extensions/local.ai-context-runner-3.11.0
+ln -s /path/to/AIContext \
+      ~/.vscode-server/extensions/local.ai-context-runner-4.3.0
 ```
+
+Match the version suffix to the `version` field in `package.json` so VS Code
+registers the right edition; rename the symlink on each bump.
 
 Then reload VS Code:
 
@@ -326,7 +366,7 @@ sidebar panel's Behaviour section, or press `Ctrl+Alt+C` for the interactive men
 ## First-time setup (one step, per project)
 
 ```
-Ctrl+P → AI: New Context → enter name → pick project folder
+Ctrl+Shift+P → AI: New Context → enter name → pick project folder
 ```
 
 After that, every time you open that project folder VS Code auto-detects and
