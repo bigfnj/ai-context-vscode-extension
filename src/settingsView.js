@@ -408,6 +408,10 @@ class SettingsViewProvider {
                 if (this._actions.switchToPrev) await this._actions.switchToPrev();
                 break;
             }
+            case 'rescanProjects': {
+                if (this._actions.rescanProjects) await this._actions.rescanProjects();
+                break;
+            }
             case 'manageRemovalCommands': {
                 if (this._actions.manageRemovalCommands) await this._actions.manageRemovalCommands();
                 this.refresh();
@@ -815,11 +819,13 @@ function render() {
                     <div class="btn-row">
                         <button onclick="send('reinject')">↺ Reinject</button>
                         <button class="sec" onclick="send('setActive')">⇄ Switch</button>
+                        <button class="sec" onclick="send('rescanProjects')" title="Scan projectsRoot for new project folders and create contexts">↻ Rescan</button>
                         <button class="sec" onclick="send('duplicateContext')" title="Duplicate this context">⧉</button>
                         <button class="sec" onclick="send('saveAsTemplate')" title="Save as template">⊞</button>
                     </div></div>\${secondariesBlock}\${prevCard}\`
                 : \`<div class="no-active">No active context</div>
-                   <button onclick="send('setActive')">Set Active</button>\${prevCard}\`
+                   <button onclick="send('setActive')">Set Active</button>
+                   <button class="sec full" onclick="send('rescanProjects')" title="Scan projectsRoot for new project folders and create contexts">↻ Rescan Projects</button>\${prevCard}\`
         ) +
         section('projects', \`Projects (\${contexts.length})\`, true,
             contexts.map(c => \`

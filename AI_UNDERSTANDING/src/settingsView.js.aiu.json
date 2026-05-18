@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/settingsView.js",
-  "sha1": "e5add7fd34d58293c966904b05cde1e0a273c925",
+  "sha1": "2f1388d371de349d6b1fb4822accda0166036e73",
   "purpose": "Sidebar webview provider for the AI Context Runner panel. Renders sections (Active Context, Projects, Templates, AI Understanding, Codex Settings, Behaviour, Permissions, About), pushes state into the webview via postMessage, and dispatches button events back to extension commands. The cloud-managed Codex banner reports both the count of cloud prompt-rule groups (prefixRulesPromptCount) AND the number of active-context allow entries shadowed by them (shadowedAllowCount) so the user knows when local trusted entries are dead weight.",
   "exports": [
     "SettingsViewProvider"
@@ -39,6 +39,7 @@
     "JS template literals in this file are the webview source; escaping is via esc() — every interpolated string from disk MUST go through esc().",
     "Adding a new section to the rendered HTML requires both a new section() call AND a state field in the postMessage payload — silent breakage if either is forgotten.",
     "The Codex section renders three separate message types — setCodexSandboxMode (radio), setCodexNetworkAccess (toggle, only meaningful in workspace-write), setCodexRecommended (one-click workspace-write + network=false). The webview's setSandboxMode() helper sends mode=null for the Off radio.",
-    "When probeCloudRequirements() returns an active payload, the Codex section renders a banner above the radio group AND marks any sandbox-mode option outside cloud sandboxAllowed as disabled with a 'blocked by policy' tag. The setCodexSandboxMode handler also re-checks against cloud allow set and refuses the write — defense in depth."
+    "When probeCloudRequirements() returns an active payload, the Codex section renders a banner above the radio group AND marks any sandbox-mode option outside cloud sandboxAllowed as disabled with a 'blocked by policy' tag. The setCodexSandboxMode handler also re-checks against cloud allow set and refuses the write — defense in depth.",
+    "The Active Context card's '↻ Rescan' button (and the 'Rescan Projects' button in the no-active branch) sends rescanProjects, which is delegated to this._actions.rescanProjects — the same _actions injection pattern as switchToPrev. The scan/notify/refresh logic lives in extension.js, not here; the webview only emits the message."
   ]
 }

@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.4.0] — on-demand "Rescan Projects" button
+
+The launch-time `projectsRoot` scan (`scanOnLaunch`) only runs on VS Code
+startup. Discovering a project folder added mid-session previously meant
+reloading the window or relying on the `.cwd` bootstrap path. This release
+surfaces the same scan as an explicit button.
+
+### Added
+
+- **`↻ Rescan` button** in the Active Context card's button row, and a
+  full-width **`↻ Rescan Projects`** button in the no-active-context state
+  so the action is reachable even before any context is set.
+- `rescanProjects` action in the `SettingsViewProvider` `_actions` object
+  (extension.js) — the on-demand twin of the `scanOnLaunch` path. Reuses
+  `scanAndCreateContexts(dir, getProjectsRoot())`, then `settingsView.refresh()`.
+- `rescanProjects` message case in `settingsView._handleMessage`, delegating
+  through `this._actions.rescanProjects` (same injection pattern as
+  `switchToPrev`).
+
+### Behavior
+
+- Unlike the launch scan (silent when nothing new is found), the button
+  always reports a result: a notification listing newly created contexts,
+  an info message confirming no new projects, or a warning if
+  `projectsRoot` is unset / missing.
+
+### Tests
+
+- `testScanAndCreateContexts` (new, run-unit.js) — covers missing/blank
+  `projectsRoot`, one-context-per-directory creation, stray-file exclusion,
+  idempotency on re-scan, and `_N` suffixing on context-name collision.
+
+---
+
 ## [4.3.0] — drop cloud-shadowed entries from Codex safe-list auto-derive
 
 When a workspace runs under cloud-managed Codex requirements (Business /

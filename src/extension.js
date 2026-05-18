@@ -601,6 +601,29 @@ function activate(context) {
                 injectAndApplyPerms(dir, prev, trackedWsState);
                 notify(`AI Context: switched to [${prev}]`);
             },
+            // On-demand twin of the launch scan. Unlike the launch path
+            // (silent on zero), an explicit button click always reports a
+            // result so the user knows it ran.
+            rescanProjects: async () => {
+                const projectsRoot = getProjectsRoot();
+                if (!projectsRoot || !fs.existsSync(projectsRoot)) {
+                    vscode.window.showWarningMessage(
+                        `AI Context: projectsRoot not found — set aiContext.projectsRoot (currently "${projectsRoot || 'unset'}").`
+                    );
+                    return;
+                }
+                const created = scanAndCreateContexts(dir, projectsRoot);
+                if (created.length > 0) {
+                    notify(
+                        `AI Context: found ${created.length} new project${created.length !== 1 ? 's' : ''} — ${created.join(', ')}`
+                    );
+                } else {
+                    vscode.window.showInformationMessage(
+                        `AI Context: no new projects under ${projectsRoot} — all folders already have contexts.`
+                    );
+                }
+                settingsView.refresh();
+            },
             addSecondary: async () => vscode.commands.executeCommand('ai.addSecondaryContext'),
             removeSecondary: async (name) => {
                 if (!name) return;

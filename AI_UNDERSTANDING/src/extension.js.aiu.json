@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "src/extension.js",
-  "sha1": "41c262a4357ae579ed55d48d75d335204c723d02",
+  "sha1": "a9bb1556d74ebc74bc8b99fd021a1730f5ea7238",
   "purpose": "Extension entrypoint. Wires up the workspace context store, settings webview, command surface, file watchers (.json/.json.update sidecars, .cwd, ~/.claude, ~/.codex), and forwards activation/deactivation to the AI Understanding subsystem (aiu.js).",
   "exports": [
     "activate",
@@ -50,6 +50,7 @@
     "activate() is ~1500 lines — order of setup matters (statusBar must exist before trackedWsState, etc.).",
     "Two state surfaces: wsState (raw VS Code state) vs trackedWsState (wrapper with side effects); always use the wrapper for mutations.",
     "execSync `git log` / `git status` timeouts at 4000ms; failures swallowed silently — do not assume git is reachable.",
-    "aiu.deactivate() called inside try/catch in deactivate() — failures here are non-fatal but the watcher may leak briefly."
+    "aiu.deactivate() called inside try/catch in deactivate() — failures here are non-fatal but the watcher may leak briefly.",
+    "The SettingsViewProvider _actions.rescanProjects callback is the on-demand twin of the scanOnLaunch path (line ~486): same scanAndCreateContexts(dir, getProjectsRoot()) call, but reports a result even on zero (showInformationMessage) since an explicit click needs feedback, and warns if projectsRoot is missing. The launch path stays silent on zero."
   ]
 }

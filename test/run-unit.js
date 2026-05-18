@@ -735,6 +735,52 @@ function testApplyCodexSandboxNetworkAccess() {
     fs.rmSync(root, { recursive: true, force: true });
 }
 
+function testScanAndCreateContexts() {
+    const ctxDir = tmpDir();
+    const projectsRoot = tmpDir();
+
+    // Nonexistent / blank projectsRoot → no-op, returns []
+    assert.deepStrictEqual(
+        context.scanAndCreateContexts(ctxDir, path.join(projectsRoot, 'does-not-exist')),
+        [],
+        'missing projectsRoot yields no contexts'
+    );
+    assert.deepStrictEqual(context.scanAndCreateContexts(ctxDir, ''), [], 'blank projectsRoot yields no contexts');
+
+    // Three project folders + one stray file (file must be ignored)
+    for (const name of ['alpha', 'beta', 'gamma']) {
+        fs.mkdirSync(path.join(projectsRoot, name), { recursive: true });
+    }
+    fs.writeFileSync(path.join(projectsRoot, 'README.txt'), 'not a project', 'utf-8');
+
+    const created = context.scanAndCreateContexts(ctxDir, projectsRoot);
+    assert.strictEqual(created.length, 3, 'three new contexts created');
+    assert.deepStrictEqual(created.slice().sort(), ['alpha', 'beta', 'gamma'], 'one context per directory');
+    assert.ok(!created.includes('README.txt'), 'stray file ignored');
+    assert.strictEqual(
+        context.loadContext(ctxDir, 'alpha').root,
+        path.join(projectsRoot, 'alpha'),
+        'context root bound to project folder'
+    );
+
+    // Idempotent: a second scan finds nothing new
+    assert.deepStrictEqual(context.scanAndCreateContexts(ctxDir, projectsRoot), [], 'second scan is a no-op');
+
+    // Name collision: a pre-existing context file forces a suffixed name
+    fs.mkdirSync(path.join(projectsRoot, 'delta'), { recursive: true });
+    context.saveContext(ctxDir, 'delta', context.createDefaultContext('delta', '/some/other/path'));
+    const created2 = context.scanAndCreateContexts(ctxDir, projectsRoot);
+    assert.deepStrictEqual(created2, ['delta_1'], 'collision resolved with _1 suffix');
+    assert.strictEqual(
+        context.loadContext(ctxDir, 'delta_1').root,
+        path.join(projectsRoot, 'delta'),
+        'suffixed context still bound to the new folder'
+    );
+
+    fs.rmSync(ctxDir, { recursive: true, force: true });
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+}
+
 function testProbeSandboxRuntime() {
     const r = permissions.probeSandboxRuntime();
     assert.ok(r && typeof r === 'object', 'returns object');
@@ -1050,6 +1096,7 @@ testUpdateCodexTomlContent();
 testSearchContexts();
 testCheckContextHealth();
 testTemplates();
+testScanAndCreateContexts();
 testApplyCodexSandboxMode();
 testApplyCodexSandboxNetworkAccess();
 testProbeSandboxRuntime();
